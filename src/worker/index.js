@@ -68,7 +68,6 @@ If unreadable: REG:UNKNOWN` }
     }, body)
 
     console.log('Claude status:', res.status, '| body:', res.body.slice(0, 400))
-
     const data  = JSON.parse(res.body)
     const text  = data.content?.find(b => b.type === 'text')?.text?.trim() || ''
     const match = text.match(/REG:([A-Z0-9]+)/i)
@@ -93,7 +92,10 @@ async function reverseGeocode(lat, lon) {
       a.county,
       a.country
     ].filter(Boolean).join(', ')
-  } catch { return null }
+  } catch (e) {
+    console.warn('Geocode error:', e.message)
+    return null
+  }
 }
 
 async function extractExif(buffer) {
@@ -102,7 +104,9 @@ async function extractExif(buffer) {
     const data  = await exifr.default.parse(buffer, {
       pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef']
     })
+    console.log('EXIF raw data:', JSON.stringify(data))
     if (!data) return {}
+
     const lat = data.GPSLatitude  != null ? parseFloat(data.GPSLatitude)  : null
     const lon = data.GPSLongitude != null ? parseFloat(data.GPSLongitude) : null
     const raw = data.DateTimeOriginal || data.CreateDate
@@ -113,6 +117,7 @@ async function extractExif(buffer) {
         weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
       }) + ' at ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
     }
+    console.log('EXIF parsed — lat:', lat, 'lon:', lon, 'date:', dateStr)
     return { lat, lon, dateStr }
   } catch (e) {
     console.warn('EXIF extraction failed:', e.message)
@@ -121,13 +126,26 @@ async function extractExif(buffer) {
 }
 
 async function toJpegBase64(buffer, ext) {
+  const isHeic = ext === 'heic' || ext === 'heif'
+
+  if (isHeic) {
+    try {
+      const heicConvert = require('heic-convert')
+      const jpeg = await heicConvert({ buffer, format: 'JPEG', quality: 0.85 })
+      console.log(`Converted HEIC to JPEG using heic-convert (${jpeg.length} bytes)`)
+      return Buffer.from(jpeg).toString('base64')
+    } catch (e) {
+      console.warn('heic-convert failed:', e.message)
+    }
+  }
+
   try {
     const sharp = require('sharp')
-    const jpeg = await sharp(buffer).jpeg({ quality: 85 }).toBuffer()
-    console.log(`Converted ${ext} to JPEG (${jpeg.length} bytes)`)
+    const jpeg  = await sharp(buffer).jpeg({ quality: 85 }).toBuffer()
+    console.log(`Converted ${ext} to JPEG using sharp (${jpeg.length} bytes)`)
     return jpeg.toString('base64')
   } catch (e) {
-    console.warn('sharp conversion failed, using raw buffer:', e.message)
+    console.warn('sharp conversion failed:', e.message)
     return buffer.toString('base64')
   }
 }
@@ -137,21 +155,27 @@ async function processPhoto(job) {
   console.log(`Processing photo: ${originalName}`)
 
   const { data: fileData, error: dlError } = await supabase.storage
-    .from('photos')
-    .download(storagePath)
+    .from('photos').download(storagePath)
 
   if (dlError) throw new Error(`Storage download failed: ${dlError.message}`)
 
   const buffer = Buffer.from(await fileData.arrayBuffer())
   const ext    = originalName.split('.').pop().toLowerCase()
 
+  const { lat, lon, dateStr } = await extractExif(buffer)
+
   const b64 = await toJpegBase64(buffer, ext)
   const reg = await readPlate(b64)
   console.log(`Plate result for ${originalName}: ${reg}`)
 
-  const { lat, lon, dateStr } = await extractExif(buffer)
   let address = null
-  if (lat != null && lon != null) address = await reverseGeocode(lat, lon)
+  if (lat != null && lon != null) {
+    console.log(`Geocoding: ${lat}, ${lon}`)
+    address = await reverseGeocode(lat, lon)
+    console.log(`Address: ${address}`)
+  } else {
+    console.log('No GPS data found in photo')
+  }
 
   const isHeic  = ext === 'heic' || ext === 'heif'
   const saveExt = isHeic ? 'jpg' : ext
@@ -188,10 +212,30 @@ async function finishJob(job) {
   for (const photo of done) {
     try {
       const { data: fileData } = await supabase.storage.from('photos').download(photo.storage_path)
-      const buf   = Buffer.from(await fileData.arrayBuffer())
-      const sharp = require('sharp')
-      const jpeg  = await sharp(buf).jpeg({ quality: 85 }).toBuffer()
-      zip.file(photo.new_name, jpeg)
+      const buf      = Buffer.from(await fileData.arrayBuffer())
+      const photoExt = photo.original_name?.split('.').pop().toLowerCase()
+      const isHeic   = photoExt === 'heic' || photoExt === 'heif'
+      let finalBuf   = buf
+
+      if (isHeic) {
+        try {
+          const heicConvert = require('heic-convert')
+          const jpeg = await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.85 })
+          finalBuf = Buffer.from(jpeg)
+        } catch {
+          try {
+            const sharp = require('sharp')
+            finalBuf = await sharp(buf).jpeg({ quality: 85 }).toBuffer()
+          } catch {}
+        }
+      } else {
+        try {
+          const sharp = require('sharp')
+          finalBuf = await sharp(buf).jpeg({ quality: 85 }).toBuffer()
+        } catch {}
+      }
+
+      zip.file(photo.new_name, finalBuf)
     } catch (e) {
       console.warn('ZIP: could not add', photo.new_name, e.message)
     }
