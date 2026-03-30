@@ -214,37 +214,71 @@ async function finishJob(job) {
   const found = done.length
   const zip   = new JSZip()
 
+  console.log(`Building ZIP with ${done.length} photos`)
+
   for (const photo of done) {
     try {
-      const { data: fileData } = await supabase.storage.from('photos').download(photo.storage_path)
-      const buf      = Buffer.from(await fileData.arrayBuffer())
-      const photoExt = (photo.original_name || photo.new_name || 'jpg').split('.').pop().toLowerCase()
-      const isHeic   = photoExt === 'heic' || photoExt === 'heif'
-      let finalBuf   = buf
+      console.log(`Adding to ZIP: ${photo.new_name} from ${photo.storage_path}`)
+      const { data: fileData, error: dlErr } = await supabase.storage
+        .from('photos').download(photo.storage_path)
+
+      if (dlErr) {
+        console.warn(`ZIP download failed for ${photo.new_name}:`, dlErr.message)
+        continue
+      }
+
+      const buf = Buffer.from(await fileData.arrayBuffer())
+      const ext = photo.storage_path.split('.').pop().toLowerCase()
+      const isHeic = ext === 'heic' || ext === 'heif'
+      let finalBuf = buf
 
       if (isHeic) {
         try {
           const heicConvert = require('heic-convert')
           const jpeg = await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.85 })
           finalBuf = Buffer.from(jpeg)
-        } catch {
-          try {
-            const sharp = require('sharp')
-            finalBuf = await sharp(buf).jpeg({ quality: 85 }).toBuffer()
-          } catch {}
+          console.log(`ZIP: converted HEIC to JPEG for ${photo.new_name}`)
+        } catch (e) {
+          console.warn(`ZIP: heic-convert failed for ${photo.new_name}:`, e.message)
         }
       } else {
         try {
           const sharp = require('sharp')
           finalBuf = await sharp(buf).jpeg({ quality: 85 }).toBuffer()
-        } catch {}
+        } catch (e) {
+          console.warn(`ZIP: sharp failed for ${photo.new_name}, using raw:`, e.message)
+        }
       }
 
       zip.file(photo.new_name, finalBuf)
+      console.log(`ZIP: added ${photo.new_name} (${finalBuf.length} bytes)`)
     } catch (e) {
       console.warn('ZIP: could not add', photo.new_name, e.message)
     }
   }
+
+  console.log('Generating ZIP buffer...')
+  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+  console.log(`ZIP generated: ${zipBuffer.length} bytes`)
+  const zipPath = `${userId}/${jobId}/busboard-renamed.zip`
+
+  await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
+    contentType: 'application/zip', upsert: true
+  })
+
+  const { data: signedUrl } = await supabase.storage.from('photos')
+    .createSignedUrl(zipPath, 60 * 60 * 24 * 7)
+
+  await supabase.from('jobs').update({
+    status:       'complete',
+    found,
+    processed:    photos.length,
+    zip_url:      signedUrl?.signedUrl,
+    completed_at: new Date().toISOString()
+  }).eq('id', jobId)
+
+  console.log(`Job ${jobId} complete: ${found}/${photos.length} plates found`)
+}
 
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   const zipPath   = `${userId}/${jobId}/busboard-renamed.zip`
