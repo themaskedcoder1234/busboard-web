@@ -2,7 +2,6 @@ const { Worker } = require('bullmq')
 const { createClient } = require('@supabase/supabase-js')
 const IORedis = require('ioredis')
 const https = require('https')
-const crypto = require('crypto')
 const JSZip = require('jszip')
 
 const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
@@ -42,14 +41,14 @@ function httpsPost(hostname, path, headers, body) {
   })
 }
 
-async function readPlate(imageBase64, mimeType) {
+async function readPlate(imageBase64) {
   const body = JSON.stringify({
     model: 'claude-sonnet-4-6',
     max_tokens: 64,
     messages: [{
       role: 'user',
       content: [
-        { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
         { type: 'text', text: `You are a UK vehicle registration plate reader specialising in buses and coaches.
 Find the registration plate in this image.
 UK plates: front = white background, rear = yellow background.
@@ -60,19 +59,24 @@ If unreadable: REG:UNKNOWN` }
     }]
   })
 
-  const res = await httpsPost('api.anthropic.com', '/v1/messages', {
-    'Content-Type': 'application/json',
-    'x-api-key': process.env.ANTHROPIC_API_KEY,
-    'anthropic-version': '2023-06-01',
-    'Content-Length': Buffer.byteLength(body)
-  }, body)
+  try {
+    const res = await httpsPost('api.anthropic.com', '/v1/messages', {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'Content-Length': Buffer.byteLength(body)
+    }, body)
 
-  console.log('Claude status:', res.status, '| response:', res.body.slice(0, 300))
+    console.log('Claude status:', res.status, '| body:', res.body.slice(0, 400))
 
-  const data  = JSON.parse(res.body)
-  const text  = data.content?.find(b => b.type === 'text')?.text?.trim() || ''
-  const match = text.match(/REG:([A-Z0-9]+)/i)
-  return match ? match[1].toUpperCase() : null
+    const data  = JSON.parse(res.body)
+    const text  = data.content?.find(b => b.type === 'text')?.text?.trim() || ''
+    const match = text.match(/REG:([A-Z0-9]+)/i)
+    return match ? match[1].toUpperCase() : null
+  } catch (e) {
+    console.error('Claude API error:', e.message)
+    return null
+  }
 }
 
 async function reverseGeocode(lat, lon) {
@@ -99,10 +103,8 @@ async function extractExif(buffer) {
       pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef']
     })
     if (!data) return {}
-
-    let lat = data.GPSLatitude  != null ? parseFloat(data.GPSLatitude)  : null
-    let lon = data.GPSLongitude != null ? parseFloat(data.GPSLongitude) : null
-
+    const lat = data.GPSLatitude  != null ? parseFloat(data.GPSLatitude)  : null
+    const lon = data.GPSLongitude != null ? parseFloat(data.GPSLongitude) : null
     const raw = data.DateTimeOriginal || data.CreateDate
     let dateStr = null
     if (raw) {
@@ -111,7 +113,6 @@ async function extractExif(buffer) {
         weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
       }) + ' at ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
     }
-
     return { lat, lon, dateStr }
   } catch (e) {
     console.warn('EXIF extraction failed:', e.message)
@@ -119,9 +120,21 @@ async function extractExif(buffer) {
   }
 }
 
+async function toJpegBase64(buffer, ext) {
+  try {
+    const sharp = require('sharp')
+    const jpeg = await sharp(buffer).jpeg({ quality: 85 }).toBuffer()
+    console.log(`Converted ${ext} to JPEG (${jpeg.length} bytes)`)
+    return jpeg.toString('base64')
+  } catch (e) {
+    console.warn('sharp conversion failed, using raw buffer:', e.message)
+    return buffer.toString('base64')
+  }
+}
+
 async function processPhoto(job) {
-  const { photoId, jobId, userId, storagePath, originalName } = job.data
-  console.log(`Processing photo: ${originalName} (${photoId})`)
+  const { photoId, jobId, storagePath, originalName } = job.data
+  console.log(`Processing photo: ${originalName}`)
 
   const { data: fileData, error: dlError } = await supabase.storage
     .from('photos')
@@ -129,22 +142,20 @@ async function processPhoto(job) {
 
   if (dlError) throw new Error(`Storage download failed: ${dlError.message}`)
 
-  const buffer   = Buffer.from(await fileData.arrayBuffer())
-  const ext      = originalName.split('.').pop().toLowerCase()
-  const mimeType = ext === 'heic' || ext === 'heif' ? 'image/jpeg' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
-  const b64      = buffer.toString('base64')
+  const buffer = Buffer.from(await fileData.arrayBuffer())
+  const ext    = originalName.split('.').pop().toLowerCase()
 
-  const reg = await readPlate(b64, mimeType)
+  const b64 = await toJpegBase64(buffer, ext)
+  const reg = await readPlate(b64)
   console.log(`Plate result for ${originalName}: ${reg}`)
 
   const { lat, lon, dateStr } = await extractExif(buffer)
-
   let address = null
   if (lat != null && lon != null) address = await reverseGeocode(lat, lon)
 
-  const newName = reg && reg !== 'UNKNOWN'
-    ? `${reg}.${ext === 'heic' || ext === 'heif' ? 'jpg' : ext}`
-    : null
+  const isHeic  = ext === 'heic' || ext === 'heif'
+  const saveExt = isHeic ? 'jpg' : ext
+  const newName = reg && reg !== 'UNKNOWN' ? `${reg}.${saveExt}` : null
 
   await supabase.from('photos').update({
     reg:      reg && reg !== 'UNKNOWN' ? reg : null,
@@ -158,7 +169,6 @@ async function processPhoto(job) {
   }).eq('id', photoId)
 
   await supabase.rpc('increment_job_processed', { job_id: jobId })
-
   return { reg, newName }
 }
 
@@ -169,20 +179,19 @@ async function finishJob(job) {
   await new Promise(r => setTimeout(r, 3000))
 
   const { data: photos } = await supabase
-    .from('photos')
-    .select('*')
-    .eq('job_id', jobId)
+    .from('photos').select('*').eq('job_id', jobId)
 
   const done  = photos.filter(p => p.status === 'done')
   const found = done.length
-
-  const zip = new JSZip()
+  const zip   = new JSZip()
 
   for (const photo of done) {
     try {
       const { data: fileData } = await supabase.storage.from('photos').download(photo.storage_path)
-      const buf = Buffer.from(await fileData.arrayBuffer())
-      zip.file(photo.new_name, buf)
+      const buf   = Buffer.from(await fileData.arrayBuffer())
+      const sharp = require('sharp')
+      const jpeg  = await sharp(buf).jpeg({ quality: 85 }).toBuffer()
+      zip.file(photo.new_name, jpeg)
     } catch (e) {
       console.warn('ZIP: could not add', photo.new_name, e.message)
     }
@@ -210,7 +219,7 @@ async function finishJob(job) {
 }
 
 const worker = new Worker('photo-processing', async (job) => {
-  console.log(`Processing job: ${job.name} (${job.id})`)
+  console.log(`Job received: ${job.name} (${job.id})`)
   if (job.name === 'process-photo') return processPhoto(job)
   if (job.name === 'finish-job')    return finishJob(job)
 }, {
