@@ -80,10 +80,15 @@ If unreadable: REG:UNKNOWN` }
 
 async function reverseGeocode(lat, lon) {
   try {
-    const res = await httpsGet(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`,
-      { 'User-Agent': 'BusBoard/1.0' }
-    )
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`
+    const res = await httpsGet(url, {
+      'User-Agent': 'BusBoard/1.0 (busboard-web)',
+      'Accept': 'application/json'
+    })
+    if (!res.body.startsWith('{')) {
+      console.warn('Geocode returned non-JSON:', res.body.slice(0, 100))
+      return null
+    }
     const a = JSON.parse(res.body).address || {}
     return [
       a.road || a.pedestrian,
@@ -213,7 +218,7 @@ async function finishJob(job) {
     try {
       const { data: fileData } = await supabase.storage.from('photos').download(photo.storage_path)
       const buf      = Buffer.from(await fileData.arrayBuffer())
-      const photoExt = photo.original_name?.split('.').pop().toLowerCase()
+      const photoExt = (photo.original_name || photo.new_name || 'jpg').split('.').pop().toLowerCase()
       const isHeic   = photoExt === 'heic' || photoExt === 'heif'
       let finalBuf   = buf
 
