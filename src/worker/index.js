@@ -2,7 +2,7 @@
 // Run with: npm run worker
 // Pulls jobs from Redis queue, processes each photo, updates Supabase
 
-require('dotenv').config({ path: '.env.local' })
+
 
 const { Worker } = require('bullmq')
 const { createClient } = require('@supabase/supabase-js')
