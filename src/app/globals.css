@@ -15,59 +15,46 @@
   --success:  #1A7A4A;
 }
 
-body { background: var(--cream); }
+body { background: #FFF8F0; }
 
-/* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(200,16,46,0.2); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(200,16,46,0.4); }
 
-/* Number plate font feel */
-.plate-text {
-  font-family: 'Charles Wright', 'UKNumberPlate', monospace;
-  letter-spacing: 0.15em;
-}
-
 @layer components {
-  /* Routemaster red button */
   .btn-red {
-    @apply bg-red-bus hover:bg-red-dark text-white font-semibold
+    @apply bg-[#C8102E] hover:bg-[#9B0B22] text-white font-semibold
            rounded-lg px-5 py-2.5 text-sm transition-colors
            disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
-  /* Dark/charcoal button */
   .btn-dark {
-    @apply bg-charcoal hover:bg-gray-800 text-white font-semibold
+    @apply bg-gray-900 hover:bg-gray-800 text-white font-semibold
            rounded-lg px-5 py-2.5 text-sm transition-colors
            disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
-  /* Ghost button */
   .btn-ghost {
     @apply bg-transparent border border-[#E8DDD8] hover:border-[#C8B8B0]
-           text-gray-600 hover:text-charcoal font-medium
+           text-gray-600 hover:text-gray-900 font-medium
            rounded-lg px-4 py-2 text-sm transition-colors;
   }
 
-  /* Input field */
   .input {
-    @apply w-full bg-white border border-[#E8DDD8] focus:border-red-bus
+    @apply w-full bg-white border border-[#E8DDD8] focus:border-[#C8102E]
            rounded-lg px-3 py-2.5 text-sm outline-none transition-colors
            placeholder:text-gray-400;
   }
 
-  /* Card */
   .card {
     @apply bg-white border border-[#E8DDD8] rounded-xl p-4;
   }
 
-  /* Number plate */
   .plate {
     @apply inline-flex items-center gap-1
-           bg-gold border-2 border-yellow-600
+           bg-[#F5C518] border-2 border-yellow-600
            rounded px-2.5 py-0.5 font-mono font-bold
-           text-charcoal tracking-widest text-base;
+           text-gray-900 tracking-widest text-base;
   }
 }
