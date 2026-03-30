@@ -227,10 +227,10 @@ async function finishJob(job) {
         continue
       }
 
-      const buf = Buffer.from(await fileData.arrayBuffer())
-      const ext = photo.storage_path.split('.').pop().toLowerCase()
-      const isHeic = ext === 'heic' || ext === 'heif'
-      let finalBuf = buf
+      const buf      = Buffer.from(await fileData.arrayBuffer())
+      const photoExt = photo.storage_path.split('.').pop().toLowerCase()
+      const isHeic   = photoExt === 'heic' || photoExt === 'heif'
+      let finalBuf   = buf
 
       if (isHeic) {
         try {
@@ -261,27 +261,6 @@ async function finishJob(job) {
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   console.log(`ZIP generated: ${zipBuffer.length} bytes`)
   const zipPath = `${userId}/${jobId}/busboard-renamed.zip`
-
-  await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
-    contentType: 'application/zip', upsert: true
-  })
-
-  const { data: signedUrl } = await supabase.storage.from('photos')
-    .createSignedUrl(zipPath, 60 * 60 * 24 * 7)
-
-  await supabase.from('jobs').update({
-    status:       'complete',
-    found,
-    processed:    photos.length,
-    zip_url:      signedUrl?.signedUrl,
-    completed_at: new Date().toISOString()
-  }).eq('id', jobId)
-
-  console.log(`Job ${jobId} complete: ${found}/${photos.length} plates found`)
-}
-
-  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
-  const zipPath   = `${userId}/${jobId}/busboard-renamed.zip`
 
   await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
     contentType: 'application/zip', upsert: true
