@@ -1,9 +1,3 @@
-// ── BusBoard Background Worker ────────────────────────────────────────────────
-// Run with: npm run worker
-// Pulls jobs from Redis queue, processes each photo, updates Supabase
-
-
-
 const { Worker } = require('bullmq')
 const { createClient } = require('@supabase/supabase-js')
 const IORedis = require('ioredis')
@@ -20,8 +14,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { autoRefreshToken: false, persistSession: false } }
 )
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function httpsGet(url, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -50,10 +42,9 @@ function httpsPost(hostname, path, headers, body) {
   })
 }
 
-// ── Read plate via Claude ─────────────────────────────────────────────────────
 async function readPlate(imageBase64, mimeType) {
   const body = JSON.stringify({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 64,
     messages: [{
       role: 'user',
@@ -76,13 +67,14 @@ If unreadable: REG:UNKNOWN` }
     'Content-Length': Buffer.byteLength(body)
   }, body)
 
+  console.log('Claude status:', res.status, '| response:', res.body.slice(0, 300))
+
   const data  = JSON.parse(res.body)
   const text  = data.content?.find(b => b.type === 'text')?.text?.trim() || ''
   const match = text.match(/REG:([A-Z0-9]+)/i)
   return match ? match[1].toUpperCase() : null
 }
 
-// ── Reverse geocode ───────────────────────────────────────────────────────────
 async function reverseGeocode(lat, lon) {
   try {
     const res = await httpsGet(
@@ -100,7 +92,6 @@ async function reverseGeocode(lat, lon) {
   } catch { return null }
 }
 
-// ── Extract EXIF from buffer using exifr (pure JS, no exiftool needed) ────────
 async function extractExif(buffer) {
   try {
     const exifr = await import('exifr')
@@ -128,16 +119,10 @@ async function extractExif(buffer) {
   }
 }
 
-function formatReg(reg) {
-  if (/^[A-Z]{2}\d{2}[A-Z]{3}$/.test(reg)) return `${reg.slice(0,4)} ${reg.slice(4)}`
-  return reg
-}
-
-// ── Process a single photo ────────────────────────────────────────────────────
 async function processPhoto(job) {
   const { photoId, jobId, userId, storagePath, originalName } = job.data
+  console.log(`Processing photo: ${originalName} (${photoId})`)
 
-  // Download from Supabase storage
   const { data: fileData, error: dlError } = await supabase.storage
     .from('photos')
     .download(storagePath)
@@ -149,13 +134,11 @@ async function processPhoto(job) {
   const mimeType = ext === 'heic' || ext === 'heif' ? 'image/jpeg' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
   const b64      = buffer.toString('base64')
 
-  // Read plate
   const reg = await readPlate(b64, mimeType)
+  console.log(`Plate result for ${originalName}: ${reg}`)
 
-  // Extract EXIF
   const { lat, lon, dateStr } = await extractExif(buffer)
 
-  // Reverse geocode
   let address = null
   if (lat != null && lon != null) address = await reverseGeocode(lat, lon)
 
@@ -163,7 +146,6 @@ async function processPhoto(job) {
     ? `${reg}.${ext === 'heic' || ext === 'heif' ? 'jpg' : ext}`
     : null
 
-  // Update photo record
   await supabase.from('photos').update({
     reg:      reg && reg !== 'UNKNOWN' ? reg : null,
     new_name: newName,
@@ -175,17 +157,15 @@ async function processPhoto(job) {
     error:    (!reg || reg === 'UNKNOWN') ? 'Plate not found' : null,
   }).eq('id', photoId)
 
-  // Increment job processed count
   await supabase.rpc('increment_job_processed', { job_id: jobId })
 
   return { reg, newName }
 }
 
-// ── Finish job — build ZIP and update status ──────────────────────────────────
 async function finishJob(job) {
   const { jobId, userId } = job.data
+  console.log(`Finishing job: ${jobId}`)
 
-  // Wait a moment to ensure all photo jobs are truly done
   await new Promise(r => setTimeout(r, 3000))
 
   const { data: photos } = await supabase
@@ -193,10 +173,9 @@ async function finishJob(job) {
     .select('*')
     .eq('job_id', jobId)
 
-  const done    = photos.filter(p => p.status === 'done')
-  const found   = done.length
+  const done  = photos.filter(p => p.status === 'done')
+  const found = done.length
 
-  // Build ZIP
   const zip = new JSZip()
 
   for (const photo of done) {
@@ -216,7 +195,6 @@ async function finishJob(job) {
     contentType: 'application/zip', upsert: true
   })
 
-  // Get a signed URL (valid 7 days)
   const { data: signedUrl } = await supabase.storage.from('photos')
     .createSignedUrl(zipPath, 60 * 60 * 24 * 7)
 
@@ -231,16 +209,13 @@ async function finishJob(job) {
   console.log(`Job ${jobId} complete: ${found}/${photos.length} plates found`)
 }
 
-// ── Start worker ──────────────────────────────────────────────────────────────
 const worker = new Worker('photo-processing', async (job) => {
   console.log(`Processing job: ${job.name} (${job.id})`)
-
   if (job.name === 'process-photo') return processPhoto(job)
   if (job.name === 'finish-job')    return finishJob(job)
-
 }, {
   connection,
-  concurrency: 5,   // Process 5 photos simultaneously
+  concurrency: 5,
 })
 
 worker.on('completed', job => console.log(`✓ ${job.name} ${job.id}`))
@@ -248,7 +223,6 @@ worker.on('failed',    (job, err) => console.error(`✗ ${job?.name} ${job?.id}:
 
 console.log('🚌 BusBoard worker started — waiting for jobs…')
 
-// Graceful shutdown
 process.on('SIGTERM', async () => {
   await worker.close()
   process.exit(0)
