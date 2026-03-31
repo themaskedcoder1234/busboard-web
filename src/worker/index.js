@@ -71,17 +71,86 @@ async function callClaude(imageBase64, prompt, maxTokens = 64) {
   return data.content?.find(b => b.type === 'text')?.text?.trim() || null
 }
 
-// ── Read plate ────────────────────────────────────────────────────────────────
+// ── Validate UK plate format ──────────────────────────────────────────────────
+function isValidUKPlate(reg) {
+  if (!reg || reg === 'UNKNOWN') return false
+  const formats = [
+    /^[A-Z]{2}\d{2}[A-Z]{3}$/,   // AB12CDE  (2001–present, most common)
+    /^[A-Z]\d{3}[A-Z]{3}$/,      // A123BCD  (1983–2001)
+    /^[A-Z]{3}\d{3}[A-Z]$/,      // ABC123D  (1963–1983)
+    /^[A-Z]{2}\d{2}[A-Z]{2}$/,   // AB12CD   (some cherished)
+    /^[A-Z]{1,3}\d{1,4}$/,       // A1 to ABC1234 (prefix style)
+    /^\d{1,4}[A-Z]{1,3}$/,       // 1A to 1234ABC (suffix style)
+  ]
+  return formats.some(f => f.test(reg))
+}
+
+// ── Read plate with improved prompting and retry ───────────────────────────────
 async function readPlate(imageBase64) {
-  const text = await callClaude(imageBase64, `You are a UK vehicle registration plate reader specialising in buses and coaches.
-Find the registration plate in this image.
-UK plates: front = white background, rear = yellow background.
-Common formats: AB12CDE / A123BCD / ABC123D
-Reply ONLY with: REG:AB12CDE (no spaces, uppercase)
-If unreadable: REG:UNKNOWN`)
-  if (!text) return null
-  const match = text.match(/REG:([A-Z0-9]+)/i)
-  return match ? match[1].toUpperCase() : null
+  // First attempt — detailed prompt
+  const prompt1 = `You are an expert UK vehicle registration plate reader with years of experience reading bus and coach plates.
+
+TASK: Find and read the vehicle registration plate in this image.
+
+PLATE LOCATIONS on buses:
+- Front: usually at bumper level, white background with black text
+- Rear: usually above or below the back window/bumper, YELLOW background with black text
+- Sometimes on the side near the front or rear
+
+UK PLATE FORMATS (most common first):
+- Modern (2001-present): Two letters, two numbers, three letters — e.g. LJ20BKA, YN16NZC, SN65OAA
+- Prefix (1983-2001): One letter, up to three numbers, three letters — e.g. R123ABC
+- Suffix (1963-1983): Three letters, up to three numbers, one letter — e.g. ABC123D
+
+IMPORTANT TIPS:
+- Look carefully at ALL edges and corners of the image
+- The plate may be partially obscured or at an angle
+- Characters sometimes look similar: 0/O, 1/I, 8/B, 5/S — use context to decide
+- Read every character carefully left to right
+
+Reply ONLY in this exact format: REG:AB12CDE
+If you genuinely cannot find or read a plate: REG:UNKNOWN`
+
+  const text1 = await callClaude(imageBase64, prompt1, 32)
+  if (text1) {
+    const match = text1.match(/REG:([A-Z0-9]{2,8})/i)
+    if (match) {
+      const reg = match[1].toUpperCase()
+      if (isValidUKPlate(reg)) {
+        console.log(`Plate found first attempt: ${reg}`)
+        return reg
+      }
+      console.log(`First attempt returned invalid format: ${reg}, retrying...`)
+    }
+  }
+
+  // Second attempt — different angle, simpler prompt focused on OCR
+  await new Promise(r => setTimeout(r, 1000))
+
+  const prompt2 = `Look very carefully at this bus/vehicle image. I need you to find the NUMBER PLATE.
+
+The number plate will be a rectangular sign with letters and numbers on it.
+- White plate = front of vehicle
+- Yellow plate = rear of vehicle
+
+Please scan the ENTIRE image including edges and corners.
+
+What letters and numbers do you see on the number plate?
+Reply ONLY with: REG:XXXXXXX (the exact characters, no spaces)
+If there is definitely no readable plate: REG:UNKNOWN`
+
+  const text2 = await callClaude(imageBase64, prompt2, 32)
+  if (text2) {
+    const match = text2.match(/REG:([A-Z0-9]{2,8})/i)
+    if (match) {
+      const reg = match[1].toUpperCase()
+      console.log(`Plate found second attempt: ${reg}`)
+      return reg
+    }
+  }
+
+  console.log('No plate found after two attempts')
+  return null
 }
 
 // ── Identify bus company ──────────────────────────────────────────────────────
@@ -353,56 +422,7 @@ worker.on('completed', job => console.log(`✓ ${job.name} ${job.id}`))
 worker.on('failed',    (job, err) => console.error(`✗ ${job?.name} ${job?.id}: ${err.message}`))
 
 console.log('🚌 BusBoard worker started — waiting for jobs…')
-// ── Run cleanup every hour ────────────────────────────────────────────────────
-async function runCleanup() {
-  console.log('🧹 Running scheduled cleanup...')
-  try {
-    const { data: expiredJobs } = await supabase
-      .from('jobs')
-      .select('id, user_id, status')
-      .lt('expires_at', new Date().toISOString())
-      .neq('status', 'expired')
 
-    if (!expiredJobs || expiredJobs.length === 0) {
-      console.log('🧹 No expired jobs found')
-      return
-    }
-
-    console.log(`🧹 Cleaning ${expiredJobs.length} expired job(s)`)
-
-    for (const job of expiredJobs) {
-      try {
-        const { data: photos } = await supabase
-          .from('photos').select('storage_path').eq('job_id', job.id)
-
-        if (photos?.length > 0) {
-          const paths = photos.map(p => p.storage_path).filter(Boolean)
-          if (paths.length > 0) {
-            await supabase.storage.from('photos').remove(paths)
-            console.log(`🧹 Deleted ${paths.length} files for job ${job.id}`)
-          }
-        }
-
-        const zipPath = `${job.user_id}/${job.id}/busboard-renamed.zip`
-        await supabase.storage.from('photos').remove([zipPath])
-
-        await supabase.from('jobs')
-          .update({ status: 'expired', zip_url: null })
-          .eq('id', job.id)
-
-        console.log(`🧹 Job ${job.id} expired`)
-      } catch (e) {
-        console.error(`🧹 Failed to clean job ${job.id}:`, e.message)
-      }
-    }
-  } catch (e) {
-    console.error('🧹 Cleanup error:', e.message)
-  }
-}
-
-// Run cleanup once on startup then every hour
-runCleanup()
-setInterval(runCleanup, 60 * 60 * 1000)
 process.on('SIGTERM', async () => {
   await worker.close()
   process.exit(0)
