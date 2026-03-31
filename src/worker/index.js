@@ -204,19 +204,37 @@ async function toJpegBuffer(buffer, ext) {
 function buildFilename(format, { reg, dateShort, address, company }, ext) {
   const parts  = (format || 'reg').split('_')
   const pieces = []
+
   for (const part of parts) {
-    if (part === 'reg'      && reg)       pieces.push(reg)
-    if (part === 'date'     && dateShort) pieces.push(dateShort)
+    if (part === 'reg' && reg) {
+      pieces.push(reg)
+    }
+    if (part === 'date' && dateShort) {
+      pieces.push(dateShort)
+    }
     if (part === 'location' && address) {
-      const loc = address.split(',').slice(0, 2).join('-')
-        .replace(/[^a-zA-Z0-9\-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
-      if (loc) pieces.push(loc)
+      // Take city only (3rd segment) — keeps it short
+      const segments = address.split(',').map(s => s.trim())
+      const city = segments[2] || segments[1] || segments[0]
+      if (city) {
+        const loc = city
+          .replace(/[^a-zA-Z0-9\s]/g, '')
+          .trim()
+          .replace(/\s+/g, '-')
+          .slice(0, 20)  // Max 20 chars
+        if (loc) pieces.push(loc)
+      }
     }
     if (part === 'company' && company) {
-      const co = company.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+      const co = company
+        .replace(/[^a-zA-Z0-9\s]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .slice(0, 15)  // Max 15 chars
       if (co) pieces.push(co)
     }
   }
+
   if (!pieces.length && reg) pieces.push(reg)
   return `${pieces.join('_')}.${ext}`
 }
