@@ -330,7 +330,25 @@ async function processPhoto(job) {
   return { reg, newName }
 }
 
-// ── Finish job — build ZIP ────────────────────────────────────────────────────
+// ── Helper: convert buffer to JPEG ───────────────────────────────────────────
+async function bufferToJpeg(buf, storagePath) {
+  const photoExt = storagePath.split('.').pop().toLowerCase()
+  const isHeic   = photoExt === 'heic' || photoExt === 'heif'
+  if (isHeic) {
+    try {
+      const heicConvert = require('heic-convert')
+      const jpeg = await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.85 })
+      return Buffer.from(jpeg)
+    } catch {
+      try { const sharp = require('sharp'); return await sharp(buf).jpeg({ quality: 85 }).toBuffer() } catch {}
+    }
+  } else {
+    try { const sharp = require('sharp'); return await sharp(buf).jpeg({ quality: 85 }).toBuffer() } catch {}
+  }
+  return buf
+}
+
+// ── Finish job — build ZIP with renamed/ and unprocessed/ folders ─────────────
 async function finishJob(job) {
   const { jobId, userId } = job.data
   console.log(`Finishing job: ${jobId}`)
@@ -340,12 +358,18 @@ async function finishJob(job) {
   const { data: photos } = await supabase
     .from('photos').select('*').eq('job_id', jobId)
 
-  const done  = photos.filter(p => p.status === 'done')
-  const found = done.length
-  const zip   = new JSZip()
+  const done   = photos.filter(p => p.status === 'done')
+  const failed = photos.filter(p => p.status === 'failed')
+  const found  = done.length
+  const zip    = new JSZip()
 
-  console.log(`Building ZIP with ${done.length} photos`)
+  // Create folders
+  const renamedFolder     = zip.folder('renamed')
+  const unprocessedFolder = zip.folder('unprocessed')
 
+  console.log(`Building ZIP: ${done.length} renamed, ${failed.length} unprocessed`)
+
+  // ── Add renamed photos ────────────────────────────────────────────────────
   for (const photo of done) {
     try {
       const { data: fileData, error: dlErr } = await supabase.storage
@@ -353,41 +377,50 @@ async function finishJob(job) {
       if (dlErr) { console.warn(`ZIP skip ${photo.new_name}:`, dlErr.message); continue }
 
       const buf      = Buffer.from(await fileData.arrayBuffer())
-      const photoExt = photo.storage_path.split('.').pop().toLowerCase()
-      const isHeic   = photoExt === 'heic' || photoExt === 'heif'
-      let finalBuf   = buf
+      const finalBuf = await bufferToJpeg(buf, photo.storage_path)
 
-      if (isHeic) {
-        try {
-          const heicConvert = require('heic-convert')
-          const jpeg = await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.85 })
-          finalBuf = Buffer.from(jpeg)
-        } catch {
-          try { const sharp = require('sharp'); finalBuf = await sharp(buf).jpeg({ quality: 85 }).toBuffer() } catch {}
-        }
-      } else {
-        try { const sharp = require('sharp'); finalBuf = await sharp(buf).jpeg({ quality: 85 }).toBuffer() } catch {}
-      }
-
-      // Handle duplicate filenames
+      // Handle duplicate filenames within renamed folder
       let zipName = photo.new_name
       let counter = 1
-      while (zip.files[zipName]) {
+      while (renamedFolder.files[`renamed/${zipName}`]) {
         const parts = photo.new_name.split('.')
         const ext   = parts.pop()
         zipName = `${parts.join('.')}_${counter}.${ext}`
         counter++
       }
 
-      zip.file(zipName, finalBuf)
-      console.log(`ZIP: added ${zipName}`)
+      renamedFolder.file(zipName, finalBuf)
+      console.log(`ZIP renamed: ${zipName}`)
     } catch (e) {
-      console.warn('ZIP error:', photo.new_name, e.message)
+      console.warn('ZIP renamed error:', photo.new_name, e.message)
+    }
+  }
+
+  // ── Add unprocessed photos ────────────────────────────────────────────────
+  for (const photo of failed) {
+    try {
+      const { data: fileData, error: dlErr } = await supabase.storage
+        .from('photos').download(photo.storage_path)
+      if (dlErr) { console.warn(`ZIP skip unprocessed ${photo.original_name}:`, dlErr.message); continue }
+
+      const buf      = Buffer.from(await fileData.arrayBuffer())
+      const finalBuf = await bufferToJpeg(buf, photo.storage_path)
+
+      // Use original filename for unprocessed
+      const origName = photo.original_name || `unprocessed_${photo.id}.jpg`
+      const ext      = photo.storage_path.split('.').pop().toLowerCase()
+      const saveExt  = (ext === 'heic' || ext === 'heif') ? 'jpg' : ext
+      const baseName = origName.replace(/\.[^.]+$/, '') + '.' + saveExt
+
+      unprocessedFolder.file(baseName, finalBuf)
+      console.log(`ZIP unprocessed: ${baseName}`)
+    } catch (e) {
+      console.warn('ZIP unprocessed error:', photo.original_name, e.message)
     }
   }
 
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
-  console.log(`ZIP generated: ${zipBuffer.length} bytes`)
+  console.log(`ZIP generated: ${zipBuffer.length} bytes (${done.length} renamed, ${failed.length} unprocessed)`)
   const zipPath = `${userId}/${jobId}/busboard-renamed.zip`
 
   await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
