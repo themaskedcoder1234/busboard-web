@@ -115,7 +115,6 @@ If no plate visible: REG:UNKNOWN`
     }
   }
 
-  // Second attempt with simpler prompt
   const text2 = await callClaude(imageBase64,
     `Find the number plate on this vehicle. Reply ONLY: REG:XXXXXXX or REG:UNKNOWN`)
   if (text2) {
@@ -176,12 +175,12 @@ async function extractExif(buffer) {
   }
 }
 
-async function toJpegBuffer(buffer, ext) {
+// Only used for sending to Claude — resizes large files under 5MB limit
+async function toJpegForClaude(buffer, ext) {
   const isHeic = ext === 'heic' || ext === 'heif'
   try {
     const sharp = require('sharp')
     let input = buffer
-
     if (isHeic) {
       try {
         const heicConvert = require('heic-convert')
@@ -189,11 +188,9 @@ async function toJpegBuffer(buffer, ext) {
         input = Buffer.from(jpeg)
       } catch {}
     }
-
     return await sharp(input)
       .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 82, chromaSubsampling: '4:4:4' })
-      .withMetadata()  // Preserve colour profile and EXIF
+      .jpeg({ quality: 82 })
       .toBuffer()
   } catch (e) {
     console.warn('sharp failed:', e.message)
@@ -204,37 +201,24 @@ async function toJpegBuffer(buffer, ext) {
 function buildFilename(format, { reg, dateShort, address, company }, ext) {
   const parts  = (format || 'reg').split('_')
   const pieces = []
-
   for (const part of parts) {
-    if (part === 'reg' && reg) {
-      pieces.push(reg)
-    }
-    if (part === 'date' && dateShort) {
-      pieces.push(dateShort)
-    }
+    if (part === 'reg' && reg) pieces.push(reg)
+    if (part === 'date' && dateShort) pieces.push(dateShort)
     if (part === 'location' && address) {
-      // Take city only (3rd segment) — keeps it short
       const segments = address.split(',').map(s => s.trim())
       const city = segments[2] || segments[1] || segments[0]
       if (city) {
-        const loc = city
-          .replace(/[^a-zA-Z0-9\s]/g, '')
-          .trim()
-          .replace(/\s+/g, '-')
-          .slice(0, 20)  // Max 20 chars
+        const loc = city.replace(/[^a-zA-Z0-9\s]/g, '').trim()
+          .replace(/\s+/g, '-').slice(0, 20)
         if (loc) pieces.push(loc)
       }
     }
     if (part === 'company' && company) {
-      const co = company
-        .replace(/[^a-zA-Z0-9\s]/g, '')
-        .trim()
-        .replace(/\s+/g, '-')
-        .slice(0, 15)  // Max 15 chars
+      const co = company.replace(/[^a-zA-Z0-9\s]/g, '').trim()
+        .replace(/\s+/g, '-').slice(0, 15)
       if (co) pieces.push(co)
     }
   }
-
   if (!pieces.length && reg) pieces.push(reg)
   return `${pieces.join('_')}.${ext}`
 }
@@ -257,8 +241,10 @@ async function processPhoto(job) {
   const saveExt = (ext === 'heic' || ext === 'heif') ? 'jpg' : ext
 
   const { lat, lon, dateStr, dateShort } = await extractExif(buffer)
-  const jpegBuf = await toJpegBuffer(buffer, ext)
-  const b64     = jpegBuf.toString('base64')
+
+  // Resize only for Claude — original buffer is kept for ZIP
+  const claudeBuf = await toJpegForClaude(buffer, ext)
+  const b64       = claudeBuf.toString('base64')
 
   const reg = await readPlate(b64)
   console.log(`Plate: ${reg}`)
@@ -285,8 +271,6 @@ async function processPhoto(job) {
   }).eq('id', photoId)
 
   await supabase.rpc('increment_job_processed', { job_id: jobId })
-
-  // Delay to stay within rate limits
   await new Promise(r => setTimeout(r, 3000))
   return { reg, newName }
 }
@@ -306,19 +290,18 @@ async function finishJob(job) {
 
   console.log(`Building ZIP: ${done.length} renamed, ${failed.length} unprocessed`)
 
-  const zip            = new JSZip()
-  const renamedFolder  = zip.folder('renamed')
+  const zip               = new JSZip()
+  const renamedFolder     = zip.folder('renamed')
   const unprocessedFolder = zip.folder('unprocessed')
 
-  // Add renamed photos — process in small batches to avoid memory spikes
+  // Add renamed photos using original untouched buffer
   for (const photo of done) {
     try {
       const { data: fileData, error } = await supabase.storage
         .from('photos').download(photo.storage_path)
       if (error) { console.warn('Skip renamed:', photo.new_name, error.message); continue }
 
-      const buf      = Buffer.from(await fileData.arrayBuffer())
-      const finalBuf = await toJpegBuffer(buf, photo.storage_path.split('.').pop().toLowerCase())
+      const buf = Buffer.from(await fileData.arrayBuffer())
 
       let zipName = photo.new_name
       let counter = 1
@@ -328,17 +311,14 @@ async function finishJob(job) {
         zipName = `${parts.join('.')}_${counter++}.${ext}`
       }
 
-      renamedFolder.file(zipName, finalBuf)
-      console.log(`ZIP renamed: ${zipName} (${Math.round(finalBuf.length/1024)}KB)`)
-
-      // Release buffer from memory
-      finalBuf.fill(0)
+      renamedFolder.file(zipName, buf)
+      console.log(`ZIP renamed: ${zipName} (${Math.round(buf.length/1024)}KB)`)
     } catch (e) {
       console.warn('ZIP renamed error:', e.message)
     }
   }
 
-  // Add unprocessed photos
+  // Add unprocessed photos using original untouched buffer
   for (const photo of failed) {
     try {
       const { data: fileData, error } = await supabase.storage
@@ -346,15 +326,11 @@ async function finishJob(job) {
       if (error) { console.warn('Skip unprocessed:', photo.original_name, error.message); continue }
 
       const buf      = Buffer.from(await fileData.arrayBuffer())
-      const ext      = photo.storage_path.split('.').pop().toLowerCase()
-      const finalBuf = await toJpegBuffer(buf, ext)
-      const saveExt  = (ext === 'heic' || ext === 'heif') ? 'jpg' : ext
-      const baseName = (photo.original_name || `photo_${photo.id}`).replace(/\.[^.]+$/, '') + '.' + saveExt
+      const origName = photo.original_name || `photo_${photo.id}.jpg`
+      const baseName = origName  // Keep exact original filename
 
-      unprocessedFolder.file(baseName, finalBuf)
-      console.log(`ZIP unprocessed: ${baseName} (${Math.round(finalBuf.length/1024)}KB)`)
-
-      finalBuf.fill(0)
+      unprocessedFolder.file(baseName, buf)
+      console.log(`ZIP unprocessed: ${baseName} (${Math.round(buf.length/1024)}KB)`)
     } catch (e) {
       console.warn('ZIP unprocessed error:', e.message)
     }
@@ -392,7 +368,6 @@ async function finishJob(job) {
   console.log(`Job ${jobId} complete: ${found}/${photos.length} plates found`)
 }
 
-// ── Cleanup expired jobs ──────────────────────────────────────────────────────
 async function runCleanup() {
   try {
     const { data: expiredJobs } = await supabase
@@ -417,14 +392,13 @@ async function runCleanup() {
   }
 }
 
-// ── Worker ────────────────────────────────────────────────────────────────────
 const worker = new Worker('photo-processing', async (job) => {
   console.log(`Job received: ${job.name}`)
   if (job.name === 'process-photo') return processPhoto(job)
   if (job.name === 'finish-job')    return finishJob(job)
 }, {
   connection,
-  concurrency: 1,  // One at a time to stay within rate limits and memory
+  concurrency: 1,
 })
 
 worker.on('completed', job => console.log(`✓ ${job.name} ${job.id}`))
@@ -432,7 +406,6 @@ worker.on('failed',    (job, err) => console.error(`✗ ${job?.name}: ${err.mess
 
 console.log('🚌 BusBoard worker started — waiting for jobs…')
 
-// Cleanup every hour
 runCleanup()
 setInterval(runCleanup, 60 * 60 * 1000)
 
