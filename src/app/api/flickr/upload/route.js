@@ -50,7 +50,7 @@ async function flickrAPI(method, extraParams, key, secret, token, tokenSecret) {
   return res.json()
 }
 
-async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key, secret, token, tokenSecret) {
+async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key, secret, token, tokenSecret, attempt = 1) {
   const url       = 'https://up.flickr.com/services/upload/'
   const nonce     = crypto.randomBytes(16).toString('hex')
   const timestamp = Math.floor(Date.now() / 1000).toString()
@@ -64,9 +64,9 @@ async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key
   const sorted = Object.keys(params).sort().map(k => `${percentEncode(k)}=${percentEncode(params[k])}`).join('&')
   params.oauth_signature = sign(`POST&${percentEncode(url)}&${percentEncode(sorted)}`, `${percentEncode(secret)}&${percentEncode(tokenSecret)}`)
 
-  const boundary   = `busboard_${crypto.randomBytes(8).toString('hex')}`
+  const boundary     = `busboard_${crypto.randomBytes(8).toString('hex')}`
   const safeFileName = fileName.replace(/\.[^.]+$/, '') + '.jpg'
-  const textPart   = Object.keys(params).map(k =>
+  const textPart     = Object.keys(params).map(k =>
     `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${params[k]}\r\n`
   ).join('')
 
@@ -77,14 +77,28 @@ async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key
     Buffer.from(`\r\n--${boundary}--\r\n`)
   ])
 
-  const res   = await fetch(url, {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
     body
   })
   const xml   = await res.text()
   const match = xml.match(/<photoid>(\d+)<\/photoid>/)
-  if (!match) throw new Error(`Flickr upload failed: ${xml}`)
+
+  if (!match) {
+    const isTemporary = xml.includes('service is not currently available') ||
+                        xml.includes('internal error') ||
+                        xml.includes('try again')
+
+    if (isTemporary && attempt < 4) {
+      const waitMs = attempt * 5000  // 5s, 10s, 15s
+      console.warn(`Flickr temporarily unavailable (attempt ${attempt}) — retrying in ${waitMs/1000}s`)
+      await new Promise(r => setTimeout(r, waitMs))
+      return uploadToFlickr(imgBuffer, fileName, title, description, tags, key, secret, token, tokenSecret, attempt + 1)
+    }
+    throw new Error(`Flickr upload failed after ${attempt} attempt(s): ${xml}`)
+  }
+
   return match[1]
 }
 
@@ -92,7 +106,6 @@ async function getOrCreateAlbum(title, primaryPhotoId, userId, key, secret, toke
   const sets     = await flickrAPI('flickr.photosets.getList', { user_id: userId }, key, secret, token, tokenSecret)
   const existing = sets.photosets?.photoset?.find(s => s.title._content === title)
   if (existing) {
-    // Album exists — add this photo to it
     await flickrAPI('flickr.photosets.addPhoto',
       { photoset_id: existing.id, photo_id: primaryPhotoId },
       key, secret, token, tokenSecret
@@ -100,7 +113,6 @@ async function getOrCreateAlbum(title, primaryPhotoId, userId, key, secret, toke
     return existing.id
   }
 
-  // Create new album with this photo as primary
   const res = await flickrAPI('flickr.photosets.create', {
     title, description: `Bus photos — ${title}`, primary_photo_id: primaryPhotoId
   }, key, secret, token, tokenSecret)
