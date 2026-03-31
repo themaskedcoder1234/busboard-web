@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase-server'
 import crypto from 'crypto'
+import sharp from 'sharp'
 
 function percentEncode(str) {
   return encodeURIComponent(String(str))
@@ -10,6 +11,18 @@ function percentEncode(str) {
 
 function sign(baseString, secret) {
   return crypto.createHmac('sha1', secret).update(baseString).digest('base64')
+}
+
+async function toJpeg(buffer) {
+  try {
+    return await sharp(buffer)
+      .resize(2048, 2048, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 90 })
+      .toBuffer()
+  } catch (e) {
+    console.warn('JPEG conversion failed, using original:', e.message)
+    return buffer
+  }
 }
 
 async function flickrAPI(method, extraParams, key, secret, token, tokenSecret) {
@@ -50,9 +63,12 @@ async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key
     `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${params[k]}\r\n`
   ).join('')
 
+  // Always use .jpg extension for Flickr
+  const safeFileName = fileName.replace(/\.[^.]+$/, '') + '.jpg'
+
   const body = Buffer.concat([
     Buffer.from(textPart),
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="${fileName}"\r\nContent-Type: image/jpeg\r\n\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="${safeFileName}"\r\nContent-Type: image/jpeg\r\n\r\n`),
     imgBuffer,
     Buffer.from(`\r\n--${boundary}--\r\n`)
   ])
@@ -62,7 +78,7 @@ async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key
     headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
     body
   })
-  const xml  = await res.text()
+  const xml   = await res.text()
   const match = xml.match(/<photoid>(\d+)<\/photoid>/)
   if (!match) throw new Error(`Flickr upload failed: ${xml}`)
   return match[1]
@@ -115,27 +131,46 @@ export async function POST(req) {
     for (const photo of photos) {
       try {
         const { data: fileData } = await supabase.storage.from('photos').download(photo.storage_path)
-        const buffer = Buffer.from(await fileData.arrayBuffer())
+        let buffer = Buffer.from(await fileData.arrayBuffer())
+
+        // Convert to JPEG — Flickr only accepts JPEG/PNG/GIF
+        buffer = await toJpeg(buffer)
 
         const descParts = [`Registration: ${photo.reg}`]
         if (photo.date_str) descParts.push(`Photographed: ${photo.date_str}`)
         if (photo.address)  descParts.push(`Location: ${photo.address}`)
         if (photo.lat)      descParts.push(`GPS: ${Number(photo.lat).toFixed(6)}°, ${Number(photo.lon).toFixed(6)}°`)
 
-        const tags     = [photo.reg, 'bus', 'transport', 'ukbus', photo.address?.split(',')[2]?.trim()?.toLowerCase()].filter(Boolean).join(' ')
-        const photoId  = await uploadToFlickr(buffer, photo.new_name || `${photo.reg}.jpg`, photo.reg, descParts.join('\n'), tags, key, secret, token, tokenSecret)
+        const tags    = [photo.reg, 'bus', 'transport', 'ukbus',
+          photo.address?.split(',')[2]?.trim()?.toLowerCase()
+        ].filter(Boolean).join(' ')
+
+        const photoId = await uploadToFlickr(
+          buffer,
+          photo.new_name || `${photo.reg}.jpg`,
+          photo.reg,
+          descParts.join('\n'),
+          tags,
+          key, secret, token, tokenSecret
+        )
 
         const albumTitle = photo.date_str?.split(' at ')[0] || 'BusBoard'
         if (!albumCache[albumTitle]) {
-          albumCache[albumTitle] = await getOrCreateAlbum(albumTitle, photoId, flickrUserId, key, secret, token, tokenSecret)
+          albumCache[albumTitle] = await getOrCreateAlbum(
+            albumTitle, photoId, flickrUserId, key, secret, token, tokenSecret
+          )
         } else {
-          await flickrAPI('flickr.photosets.addPhoto', { photoset_id: albumCache[albumTitle], photo_id: photoId }, key, secret, token, tokenSecret)
+          await flickrAPI('flickr.photosets.addPhoto',
+            { photoset_id: albumCache[albumTitle], photo_id: photoId },
+            key, secret, token, tokenSecret
+          )
         }
 
         await supabase.from('photos').update({ flickr_id: photoId }).eq('id', photo.id)
         uploaded++
+        console.log(`Flickr: uploaded ${photo.reg} (${photoId})`)
       } catch (e) {
-        console.error('Flickr upload error for photo', photo.id, e.message)
+        console.error('Flickr upload error for photo', photo.reg, e.message)
       }
     }
 
