@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase-server'
 import crypto from 'crypto'
-import sharp from 'sharp'
 
 function percentEncode(str) {
   return encodeURIComponent(String(str))
@@ -14,6 +13,14 @@ function sign(baseString, secret) {
 }
 
 async function toJpeg(buffer) {
+  // Try heic-convert first for HEIC files
+  try {
+    const heicConvert = (await import('heic-convert')).default
+    const jpeg = await heicConvert({ buffer, format: 'JPEG', quality: 0.9 })
+    return Buffer.from(jpeg)
+  } catch {}
+
+  // Fall back to sharp for JPEG/PNG etc
   try {
     return await sharp(buffer)
       .resize(2048, 2048, { fit: 'inside', withoutEnlargement: true })
