@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "worker": "node src/worker/index.js",
-    "dev:worker": "node --watch src/worker/index.js"
+    "dev:worker": "node --watch src/worker/index.js",
+"cleanup": "node src/worker/cleanup.js"
   },
   "dependencies": {
     "next": "14.2.35",
