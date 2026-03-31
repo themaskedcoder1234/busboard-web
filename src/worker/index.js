@@ -198,6 +198,7 @@ async function processPhoto(job) {
   }).eq('id', photoId)
 
   await supabase.rpc('increment_job_processed', { job_id: jobId })
+  await new Promise(r => setTimeout(r, 1500))
   return { reg, newName }
 }
 
@@ -294,7 +295,7 @@ const worker = new Worker('photo-processing', async (job) => {
   if (job.name === 'finish-job')    return finishJob(job)
 }, {
   connection,
-  concurrency: 5,
+  concurrency: 3,
 })
 
 worker.on('completed', job => console.log(`✓ ${job.name} ${job.id}`))
