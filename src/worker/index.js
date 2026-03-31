@@ -249,8 +249,16 @@ async function finishJob(job) {
           console.warn(`ZIP: sharp failed for ${photo.new_name}, using raw:`, e.message)
         }
       }
-
-      zip.file(photo.new_name, finalBuf)
+// Add a counter suffix if filename already exists in ZIP
+let zipName = photo.new_name
+let counter = 1
+while (zip.files[zipName]) {
+  const parts = photo.new_name.split('.')
+  const ext   = parts.pop()
+  zipName = `${parts.join('.')}_${counter}.${ext}`
+  counter++
+}
+zip.file(zipName, finalBuf)
       console.log(`ZIP: added ${photo.new_name} (${finalBuf.length} bytes)`)
     } catch (e) {
       console.warn('ZIP: could not add', photo.new_name, e.message)
