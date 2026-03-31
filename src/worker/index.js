@@ -155,11 +155,28 @@ async function extractExif(buffer) {
   try {
     const exifr = await import('exifr')
     const data  = await exifr.default.parse(buffer, {
-      pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef']
+      pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude',
+             'GPSLatitudeRef', 'GPSLongitudeRef']
     })
     if (!data) return {}
-    const lat = data.GPSLatitude  != null ? parseFloat(data.GPSLatitude)  : null
-    const lon = data.GPSLongitude != null ? parseFloat(data.GPSLongitude) : null
+
+    // exifr returns latitude/longitude as decimal degrees already
+    // but sometimes returns as [degrees, minutes, seconds] array
+    function toDecimal(val) {
+      if (val == null) return null
+      if (Array.isArray(val)) {
+        return val[0] + (val[1] / 60) + (val[2] / 3600)
+      }
+      return parseFloat(val)
+    }
+
+    let lat = toDecimal(data.GPSLatitude)
+    let lon = toDecimal(data.GPSLongitude)
+
+    // Apply N/S and E/W
+    if (lat != null && data.GPSLatitudeRef  === 'S') lat = -lat
+    if (lon != null && data.GPSLongitudeRef === 'W') lon = -lon
+
     const raw = data.DateTimeOriginal || data.CreateDate
     let dateStr = null, dateShort = null
     if (raw) {
@@ -168,6 +185,8 @@ async function extractExif(buffer) {
                 + ' at ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
       dateShort = d.toISOString().slice(0, 10)
     }
+
+    console.log(`EXIF: lat=${lat}, lon=${lon}, date=${dateShort}`)
     return { lat, lon, dateStr, dateShort }
   } catch (e) {
     console.warn('EXIF failed:', e.message)
