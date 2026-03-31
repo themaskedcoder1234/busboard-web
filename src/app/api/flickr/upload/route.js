@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase-server'
 import crypto from 'crypto'
+import sharp from 'sharp'
 
 function percentEncode(str) {
   return encodeURIComponent(String(str))
@@ -13,14 +14,12 @@ function sign(baseString, secret) {
 }
 
 async function toJpeg(buffer) {
-  // Try heic-convert first for HEIC files
   try {
     const heicConvert = (await import('heic-convert')).default
     const jpeg = await heicConvert({ buffer, format: 'JPEG', quality: 0.9 })
     return Buffer.from(jpeg)
   } catch {}
 
-  // Fall back to sharp for JPEG/PNG etc
   try {
     return await sharp(buffer)
       .resize(2048, 2048, { fit: 'inside', withoutEnlargement: true })
@@ -65,13 +64,11 @@ async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key
   const sorted = Object.keys(params).sort().map(k => `${percentEncode(k)}=${percentEncode(params[k])}`).join('&')
   params.oauth_signature = sign(`POST&${percentEncode(url)}&${percentEncode(sorted)}`, `${percentEncode(secret)}&${percentEncode(tokenSecret)}`)
 
-  const boundary = `busboard_${crypto.randomBytes(8).toString('hex')}`
-  const textPart = Object.keys(params).map(k =>
+  const boundary   = `busboard_${crypto.randomBytes(8).toString('hex')}`
+  const safeFileName = fileName.replace(/\.[^.]+$/, '') + '.jpg'
+  const textPart   = Object.keys(params).map(k =>
     `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${params[k]}\r\n`
   ).join('')
-
-  // Always use .jpg extension for Flickr
-  const safeFileName = fileName.replace(/\.[^.]+$/, '') + '.jpg'
 
   const body = Buffer.concat([
     Buffer.from(textPart),
@@ -80,7 +77,7 @@ async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key
     Buffer.from(`\r\n--${boundary}--\r\n`)
   ])
 
-  const res  = await fetch(url, {
+  const res   = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
     body
@@ -92,10 +89,18 @@ async function uploadToFlickr(imgBuffer, fileName, title, description, tags, key
 }
 
 async function getOrCreateAlbum(title, primaryPhotoId, userId, key, secret, token, tokenSecret) {
-  const sets = await flickrAPI('flickr.photosets.getList', { user_id: userId }, key, secret, token, tokenSecret)
+  const sets     = await flickrAPI('flickr.photosets.getList', { user_id: userId }, key, secret, token, tokenSecret)
   const existing = sets.photosets?.photoset?.find(s => s.title._content === title)
-  if (existing) return existing.id
+  if (existing) {
+    // Album exists — add this photo to it
+    await flickrAPI('flickr.photosets.addPhoto',
+      { photoset_id: existing.id, photo_id: primaryPhotoId },
+      key, secret, token, tokenSecret
+    )
+    return existing.id
+  }
 
+  // Create new album with this photo as primary
   const res = await flickrAPI('flickr.photosets.create', {
     title, description: `Bus photos — ${title}`, primary_photo_id: primaryPhotoId
   }, key, secret, token, tokenSecret)
@@ -128,6 +133,8 @@ export async function POST(req) {
       .eq('status', 'done')
       .not('reg', 'is', null)
 
+    console.log(`Flickr: uploading ${photos?.length || 0} photos for job ${jobId}`)
+
     const key    = process.env.FLICKR_CONSUMER_KEY
     const secret = process.env.FLICKR_CONSUMER_SECRET
     const { flickr_token: token, flickr_token_secret: tokenSecret, flickr_user_id: flickrUserId } = profile
@@ -137,18 +144,23 @@ export async function POST(req) {
 
     for (const photo of photos) {
       try {
-        const { data: fileData } = await supabase.storage.from('photos').download(photo.storage_path)
-        let buffer = Buffer.from(await fileData.arrayBuffer())
+        console.log(`Flickr: uploading ${photo.reg} (${photo.id})`)
 
-        // Convert to JPEG — Flickr only accepts JPEG/PNG/GIF
+        const { data: fileData, error: dlErr } = await supabase.storage
+          .from('photos').download(photo.storage_path)
+        if (dlErr) { console.error('Download failed:', dlErr.message); continue }
+
+        let buffer = Buffer.from(await fileData.arrayBuffer())
         buffer = await toJpeg(buffer)
+        console.log(`Flickr: converted to JPEG (${Math.round(buffer.length / 1024)}KB)`)
 
         const descParts = [`Registration: ${photo.reg}`]
         if (photo.date_str) descParts.push(`Photographed: ${photo.date_str}`)
         if (photo.address)  descParts.push(`Location: ${photo.address}`)
         if (photo.lat)      descParts.push(`GPS: ${Number(photo.lat).toFixed(6)}°, ${Number(photo.lon).toFixed(6)}°`)
 
-        const tags    = [photo.reg, 'bus', 'transport', 'ukbus',
+        const tags = [
+          photo.reg, 'bus', 'transport', 'ukbus',
           photo.address?.split(',')[2]?.trim()?.toLowerCase()
         ].filter(Boolean).join(' ')
 
@@ -160,29 +172,33 @@ export async function POST(req) {
           tags,
           key, secret, token, tokenSecret
         )
+        console.log(`Flickr: uploaded ${photo.reg} → photoId ${photoId}`)
 
         const albumTitle = photo.date_str?.split(' at ')[0] || 'BusBoard'
         if (!albumCache[albumTitle]) {
           albumCache[albumTitle] = await getOrCreateAlbum(
             albumTitle, photoId, flickrUserId, key, secret, token, tokenSecret
           )
+          console.log(`Flickr: album "${albumTitle}" id=${albumCache[albumTitle]}`)
         } else {
-          await flickrAPI('flickr.photosets.addPhoto',
+          const addRes = await flickrAPI('flickr.photosets.addPhoto',
             { photoset_id: albumCache[albumTitle], photo_id: photoId },
             key, secret, token, tokenSecret
           )
+          console.log(`Flickr: added to album "${albumTitle}" stat=${addRes.stat}`)
         }
 
         await supabase.from('photos').update({ flickr_id: photoId }).eq('id', photo.id)
         uploaded++
-        console.log(`Flickr: uploaded ${photo.reg} (${photoId})`)
       } catch (e) {
-        console.error('Flickr upload error for photo', photo.reg, e.message)
+        console.error(`Flickr upload error for ${photo.reg}:`, e.message)
       }
     }
 
+    console.log(`Flickr: done — ${uploaded}/${photos.length} uploaded`)
     return NextResponse.json({ uploaded })
   } catch (e) {
+    console.error('Flickr route error:', e.message)
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
