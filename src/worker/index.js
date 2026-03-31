@@ -332,7 +332,8 @@ async function finishJob(job) {
     status: 'complete', found,
     processed: photos.length,
     zip_url: signedUrl?.signedUrl,
-    completed_at: new Date().toISOString()
+    completed_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
   }).eq('id', jobId)
 
   console.log(`Job ${jobId} complete: ${found}/${photos.length} plates found`)
