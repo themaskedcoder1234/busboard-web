@@ -180,20 +180,20 @@ async function toJpegBuffer(buffer, ext) {
   const isHeic = ext === 'heic' || ext === 'heif'
   try {
     const sharp = require('sharp')
-    let pipeline = sharp(isHeic ? buffer : buffer)
+    let input = buffer
 
     if (isHeic) {
       try {
         const heicConvert = require('heic-convert')
         const jpeg = await heicConvert({ buffer, format: 'JPEG', quality: 0.85 })
-        pipeline = sharp(Buffer.from(jpeg))
+        input = Buffer.from(jpeg)
       } catch {}
     }
 
-    // Resize to max 1600px on longest side — keeps detail but stays under 5MB
-    return await pipeline
+    return await sharp(input)
       .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 82 })
+      .jpeg({ quality: 82, chromaSubsampling: '4:4:4' })
+      .withMetadata()  // Preserve colour profile and EXIF
       .toBuffer()
   } catch (e) {
     console.warn('sharp failed:', e.message)
