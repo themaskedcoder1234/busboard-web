@@ -2,22 +2,36 @@
 import Link from 'next/link'
 
 const STATUS_STYLES = {
-  pending:    { dot: 'bg-gray-300',   label: 'Pending',    text: 'text-gray-500' },
-  processing: { dot: 'bg-amber-400 animate-pulse', label: 'Processing', text: 'text-amber-700' },
-  complete:   { dot: 'bg-green-500',  label: 'Complete',   text: 'text-green-700' },
-  failed:     { dot: 'bg-red-500',    label: 'Failed',     text: 'text-red-700' },
+  pending:    { dot: 'bg-gray-300',                      label: 'Pending',    text: 'text-gray-500'  },
+  processing: { dot: 'bg-amber-400 animate-pulse',       label: 'Processing', text: 'text-amber-700' },
+  complete:   { dot: 'bg-green-500',                     label: 'Complete',   text: 'text-green-700' },
+  failed:     { dot: 'bg-red-500',                       label: 'Failed',     text: 'text-red-700'   },
+  expired:    { dot: 'bg-gray-300',                      label: 'Expired',    text: 'text-gray-400'  },
 }
 
 export default function JobList({ jobs }) {
   return (
     <div className="space-y-2">
       {jobs.map(job => {
-        const s = STATUS_STYLES[job.status] || STATUS_STYLES.pending
+        const s    = STATUS_STYLES[job.status] || STATUS_STYLES.pending
         const date = new Date(job.created_at).toLocaleDateString('en-GB', {
           day: 'numeric', month: 'short', year: 'numeric',
           hour: '2-digit', minute: '2-digit'
         })
         const pct = job.total ? Math.round((job.processed / job.total) * 100) : 0
+
+        // Show time remaining for completed jobs
+        let expiryNote = null
+        if (job.status === 'complete' && job.expires_at) {
+          const msLeft = new Date(job.expires_at) - new Date()
+          if (msLeft > 0) {
+            const hoursLeft = Math.floor(msLeft / (1000 * 60 * 60))
+            const minsLeft  = Math.floor((msLeft % (1000 * 60 * 60)) / (1000 * 60))
+            expiryNote = hoursLeft > 0
+              ? `Download expires in ${hoursLeft}h ${minsLeft}m`
+              : `Download expires in ${minsLeft}m`
+          }
+        }
 
         return (
           <div key={job.id} className="card flex items-center gap-4">
@@ -31,13 +45,18 @@ export default function JobList({ jobs }) {
                 {job.total} photos
                 {job.status === 'processing' && ` · ${job.processed} processed (${pct}%)`}
                 {job.status === 'complete'   && ` · ${job.found} plates found`}
+                {job.status === 'expired'    && ' · files deleted'}
               </div>
               {job.status === 'processing' && (
                 <div className="mt-1.5 h-1 bg-gray-100 rounded-full overflow-hidden w-48">
                   <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
                 </div>
               )}
+              {expiryNote && (
+                <p className="text-xs text-amber-600 mt-0.5">⏱ {expiryNote}</p>
+              )}
             </div>
+
             {job.status === 'complete' && (
               <div className="flex gap-2 flex-shrink-0">
                 {job.zip_url && (
@@ -51,6 +70,10 @@ export default function JobList({ jobs }) {
                   View
                 </Link>
               </div>
+            )}
+
+            {job.status === 'expired' && (
+              <span className="text-xs text-gray-400 flex-shrink-0 italic">Files deleted</span>
             )}
           </div>
         )
