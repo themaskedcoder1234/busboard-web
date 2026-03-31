@@ -178,18 +178,27 @@ async function extractExif(buffer) {
 
 async function toJpegBuffer(buffer, ext) {
   const isHeic = ext === 'heic' || ext === 'heif'
-  if (isHeic) {
-    try {
-      const heicConvert = require('heic-convert')
-      const jpeg = await heicConvert({ buffer, format: 'JPEG', quality: 0.85 })
-      return Buffer.from(jpeg)
-    } catch {}
-  }
   try {
     const sharp = require('sharp')
-    return await sharp(buffer).jpeg({ quality: 85 }).toBuffer()
-  } catch {}
-  return buffer
+    let pipeline = sharp(isHeic ? buffer : buffer)
+
+    if (isHeic) {
+      try {
+        const heicConvert = require('heic-convert')
+        const jpeg = await heicConvert({ buffer, format: 'JPEG', quality: 0.85 })
+        pipeline = sharp(Buffer.from(jpeg))
+      } catch {}
+    }
+
+    // Resize to max 1600px on longest side — keeps detail but stays under 5MB
+    return await pipeline
+      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer()
+  } catch (e) {
+    console.warn('sharp failed:', e.message)
+    return buffer
+  }
 }
 
 function buildFilename(format, { reg, dateShort, address, company }, ext) {
