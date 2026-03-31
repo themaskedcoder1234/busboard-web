@@ -175,7 +175,6 @@ async function extractExif(buffer) {
   }
 }
 
-// Only used for sending to Claude — resizes large files under 5MB limit
 async function toJpegForClaude(buffer, ext) {
   const isHeic = ext === 'heic' || ext === 'heif'
   try {
@@ -242,7 +241,6 @@ async function processPhoto(job) {
 
   const { lat, lon, dateStr, dateShort } = await extractExif(buffer)
 
-  // Resize only for Claude — original buffer is kept for ZIP
   const claudeBuf = await toJpegForClaude(buffer, ext)
   const b64       = claudeBuf.toString('base64')
 
@@ -288,13 +286,21 @@ async function finishJob(job) {
   const failed = photos.filter(p => p.status === 'failed')
   const found  = done.length
 
+  // Get user email for ZIP filename
+  const { data: userProfile } = await supabase
+    .from('profiles').select('email').eq('id', userId).single()
+  const userName  = (userProfile?.email || 'user').split('@')[0]
+    .replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)
+  const dateStamp = new Date().toISOString().slice(0, 10)
+  const zipFile   = `BusBoard_${userName}_${dateStamp}.zip`
+  const zipPath   = `${userId}/${jobId}/${zipFile}`
+
   console.log(`Building ZIP: ${done.length} renamed, ${failed.length} unprocessed`)
 
   const zip               = new JSZip()
   const renamedFolder     = zip.folder('renamed')
   const unprocessedFolder = zip.folder('unprocessed')
 
-  // Add renamed photos using original untouched buffer
   for (const photo of done) {
     try {
       const { data: fileData, error } = await supabase.storage
@@ -318,7 +324,6 @@ async function finishJob(job) {
     }
   }
 
-  // Add unprocessed photos using original untouched buffer
   for (const photo of failed) {
     try {
       const { data: fileData, error } = await supabase.storage
@@ -326,8 +331,7 @@ async function finishJob(job) {
       if (error) { console.warn('Skip unprocessed:', photo.original_name, error.message); continue }
 
       const buf      = Buffer.from(await fileData.arrayBuffer())
-      const origName = photo.original_name || `photo_${photo.id}.jpg`
-      const baseName = origName  // Keep exact original filename
+      const baseName = photo.original_name || `photo_${photo.id}.jpg`
 
       unprocessedFolder.file(baseName, buf)
       console.log(`ZIP unprocessed: ${baseName} (${Math.round(buf.length/1024)}KB)`)
@@ -343,16 +347,7 @@ async function finishJob(job) {
     compressionOptions: { level: 6 }
   })
   console.log(`ZIP: ${Math.round(zipBuffer.length / 1024 / 1024)}MB`)
-const { data: userProfile } = await supabase
-  .from('profiles').select('email').eq('id', userId).single()
-const userName  = (userProfile?.email || 'user').split('@')[0]
-  .replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)
-const dateStamp = new Date().toISOString().slice(0, 10)
-const zipFile   = `BusBoard_${userName}_${dateStamp}.zip`
-const zipPath   = `${userId}/${jobId}/${zipFile}`
-const dateStamp = new Date().toISOString().slice(0, 10)
-const zipFile   = `BusBoard_${dateStamp}.zip`
-const zipPath   = `${userId}/${jobId}/${zipFile}`
+
   const { error: uploadError } = await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
     contentType: 'application/zip', upsert: true
   })
