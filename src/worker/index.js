@@ -353,7 +353,56 @@ worker.on('completed', job => console.log(`✓ ${job.name} ${job.id}`))
 worker.on('failed',    (job, err) => console.error(`✗ ${job?.name} ${job?.id}: ${err.message}`))
 
 console.log('🚌 BusBoard worker started — waiting for jobs…')
+// ── Run cleanup every hour ────────────────────────────────────────────────────
+async function runCleanup() {
+  console.log('🧹 Running scheduled cleanup...')
+  try {
+    const { data: expiredJobs } = await supabase
+      .from('jobs')
+      .select('id, user_id, status')
+      .lt('expires_at', new Date().toISOString())
+      .neq('status', 'expired')
 
+    if (!expiredJobs || expiredJobs.length === 0) {
+      console.log('🧹 No expired jobs found')
+      return
+    }
+
+    console.log(`🧹 Cleaning ${expiredJobs.length} expired job(s)`)
+
+    for (const job of expiredJobs) {
+      try {
+        const { data: photos } = await supabase
+          .from('photos').select('storage_path').eq('job_id', job.id)
+
+        if (photos?.length > 0) {
+          const paths = photos.map(p => p.storage_path).filter(Boolean)
+          if (paths.length > 0) {
+            await supabase.storage.from('photos').remove(paths)
+            console.log(`🧹 Deleted ${paths.length} files for job ${job.id}`)
+          }
+        }
+
+        const zipPath = `${job.user_id}/${job.id}/busboard-renamed.zip`
+        await supabase.storage.from('photos').remove([zipPath])
+
+        await supabase.from('jobs')
+          .update({ status: 'expired', zip_url: null })
+          .eq('id', job.id)
+
+        console.log(`🧹 Job ${job.id} expired`)
+      } catch (e) {
+        console.error(`🧹 Failed to clean job ${job.id}:`, e.message)
+      }
+    }
+  } catch (e) {
+    console.error('🧹 Cleanup error:', e.message)
+  }
+}
+
+// Run cleanup once on startup then every hour
+runCleanup()
+setInterval(runCleanup, 60 * 60 * 1000)
 process.on('SIGTERM', async () => {
   await worker.close()
   process.exit(0)
