@@ -343,8 +343,16 @@ async function finishJob(job) {
     compressionOptions: { level: 6 }
   })
   console.log(`ZIP: ${Math.round(zipBuffer.length / 1024 / 1024)}MB`)
-
-  const zipPath = `${userId}/${jobId}/busboard-renamed.zip`
+const { data: userProfile } = await supabase
+  .from('profiles').select('email').eq('id', userId).single()
+const userName  = (userProfile?.email || 'user').split('@')[0]
+  .replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)
+const dateStamp = new Date().toISOString().slice(0, 10)
+const zipFile   = `BusBoard_${userName}_${dateStamp}.zip`
+const zipPath   = `${userId}/${jobId}/${zipFile}`
+const dateStamp = new Date().toISOString().slice(0, 10)
+const zipFile   = `BusBoard_${dateStamp}.zip`
+const zipPath   = `${userId}/${jobId}/${zipFile}`
   const { error: uploadError } = await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
     contentType: 'application/zip', upsert: true
   })
