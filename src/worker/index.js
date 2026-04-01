@@ -14,6 +14,13 @@ const supabase = createClient(
   { auth: { autoRefreshToken: false, persistSession: false } }
 )
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+const JOB_TIMEOUT_MS   = 30 * 60 * 1000  // 30 minutes
+const ZIP_CHUNK_SIZE   = 50              // Max photos per ZIP chunk
+const RATE_LIMIT_DELAY = 3000
+const RATE_LIMIT_RETRY = 15000
+
+// ── HTTP helpers ──────────────────────────────────────────────────────────────
 function httpsGet(url, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = https.request(url, { headers }, res => {
@@ -41,6 +48,7 @@ function httpsPost(hostname, path, headers, body) {
   })
 }
 
+// ── Claude API ────────────────────────────────────────────────────────────────
 async function callClaude(imageBase64, prompt, maxTokens = 32) {
   const body = JSON.stringify({
     model: 'claude-sonnet-4-6',
@@ -63,7 +71,7 @@ async function callClaude(imageBase64, prompt, maxTokens = 32) {
 
   if (res.status === 429) {
     console.warn('Rate limited — waiting 15s before retry')
-    await new Promise(r => setTimeout(r, 15000))
+    await new Promise(r => setTimeout(r, RATE_LIMIT_RETRY))
     return callClaude(imageBase64, prompt, maxTokens)
   }
 
@@ -75,6 +83,7 @@ async function callClaude(imageBase64, prompt, maxTokens = 32) {
   return data.content?.find(b => b.type === 'text')?.text?.trim() || null
 }
 
+// ── Plate reading with descriptive errors ─────────────────────────────────────
 function isValidUKPlate(reg) {
   if (!reg || reg === 'UNKNOWN') return false
   const formats = [
@@ -99,35 +108,40 @@ Find the registration plate in this bus/vehicle image.
 
 Look carefully at all edges and corners. Characters 0/O, 1/I, 8/B, 5/S can look similar.
 
-Reply ONLY: REG:AB12CDE
-If no plate visible: REG:UNKNOWN`
+Reply ONLY with one of:
+REG:AB12CDE  — if you can read a plate
+REG:OBSCURED — if there is a plate but it is blocked or blurry
+REG:DARK     — if the image is too dark to read
+REG:NOPLATE  — if there is no plate visible in the image
+REG:UNKNOWN  — if you cannot determine why it is unreadable`
 
   const text1 = await callClaude(imageBase64, prompt1)
   if (text1) {
-    const match = text1.match(/REG:([A-Z0-9]{2,8})/i)
+    const match = text1.match(/REG:([A-Z0-9]+)/i)
     if (match) {
       const reg = match[1].toUpperCase()
-      if (isValidUKPlate(reg)) {
-        console.log(`Plate found: ${reg}`)
-        return reg
-      }
-      if (reg !== 'UNKNOWN') console.log(`Invalid format: ${reg}, retrying...`)
+      if (isValidUKPlate(reg))  return { reg, error: null }
+      if (reg === 'OBSCURED')   return { reg: null, error: 'Plate obscured or blurry' }
+      if (reg === 'DARK')       return { reg: null, error: 'Image too dark to read plate' }
+      if (reg === 'NOPLATE')    return { reg: null, error: 'No plate visible in image' }
+      if (reg !== 'UNKNOWN')    console.log(`Invalid format: ${reg}, retrying...`)
     }
   }
 
+  // Second attempt
   const text2 = await callClaude(imageBase64,
     `Find the number plate on this vehicle. Reply ONLY: REG:XXXXXXX or REG:UNKNOWN`)
   if (text2) {
     const match = text2.match(/REG:([A-Z0-9]{2,8})/i)
     if (match && match[1] !== 'UNKNOWN') {
-      console.log(`Plate found (attempt 2): ${match[1]}`)
-      return match[1].toUpperCase()
+      return { reg: match[1].toUpperCase(), error: null }
     }
   }
 
-  return null
+  return { reg: null, error: 'Plate not readable' }
 }
 
+// ── Company detection ─────────────────────────────────────────────────────────
 async function identifyCompany(imageBase64) {
   const text = await callClaude(imageBase64,
     `What bus/coach company is shown? Reply ONLY: COMPANY:Name or COMPANY:Unknown`, 24)
@@ -137,6 +151,7 @@ async function identifyCompany(imageBase64) {
   return company && company.toLowerCase() !== 'unknown' ? company : null
 }
 
+// ── Reverse geocode ───────────────────────────────────────────────────────────
 async function reverseGeocode(lat, lon) {
   try {
     const res = await httpsGet(
@@ -151,29 +166,23 @@ async function reverseGeocode(lat, lon) {
   } catch { return null }
 }
 
+// ── EXIF extraction ───────────────────────────────────────────────────────────
 async function extractExif(buffer) {
   try {
     const exifr = await import('exifr')
     const data  = await exifr.default.parse(buffer, {
-      pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude',
-             'GPSLatitudeRef', 'GPSLongitudeRef']
+      pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef']
     })
     if (!data) return {}
 
-    // exifr returns latitude/longitude as decimal degrees already
-    // but sometimes returns as [degrees, minutes, seconds] array
     function toDecimal(val) {
       if (val == null) return null
-      if (Array.isArray(val)) {
-        return val[0] + (val[1] / 60) + (val[2] / 3600)
-      }
+      if (Array.isArray(val)) return val[0] + (val[1] / 60) + (val[2] / 3600)
       return parseFloat(val)
     }
 
     let lat = toDecimal(data.GPSLatitude)
     let lon = toDecimal(data.GPSLongitude)
-
-    // Apply N/S and E/W
     if (lat != null && data.GPSLatitudeRef  === 'S') lat = -lat
     if (lon != null && data.GPSLongitudeRef === 'W') lon = -lon
 
@@ -185,8 +194,6 @@ async function extractExif(buffer) {
                 + ' at ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
       dateShort = d.toISOString().slice(0, 10)
     }
-
-    console.log(`EXIF: lat=${lat}, lon=${lon}, date=${dateShort}`)
     return { lat, lon, dateStr, dateShort }
   } catch (e) {
     console.warn('EXIF failed:', e.message)
@@ -194,6 +201,7 @@ async function extractExif(buffer) {
   }
 }
 
+// ── Image conversion for Claude ───────────────────────────────────────────────
 async function toJpegForClaude(buffer, ext) {
   const isHeic = ext === 'heic' || ext === 'heif'
   try {
@@ -216,6 +224,7 @@ async function toJpegForClaude(buffer, ext) {
   }
 }
 
+// ── Filename builder ──────────────────────────────────────────────────────────
 function buildFilename(format, { reg, dateShort, address, company }, ext) {
   const parts  = (format || 'reg').split('_')
   const pieces = []
@@ -226,14 +235,12 @@ function buildFilename(format, { reg, dateShort, address, company }, ext) {
       const segments = address.split(',').map(s => s.trim())
       const city = segments[2] || segments[1] || segments[0]
       if (city) {
-        const loc = city.replace(/[^a-zA-Z0-9\s]/g, '').trim()
-          .replace(/\s+/g, '-').slice(0, 20)
+        const loc = city.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '-').slice(0, 20)
         if (loc) pieces.push(loc)
       }
     }
     if (part === 'company' && company) {
-      const co = company.replace(/[^a-zA-Z0-9\s]/g, '').trim()
-        .replace(/\s+/g, '-').slice(0, 15)
+      const co = company.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '-').slice(0, 15)
       if (co) pieces.push(co)
     }
   }
@@ -241,9 +248,55 @@ function buildFilename(format, { reg, dateShort, address, company }, ext) {
   return `${pieces.join('_')}.${ext}`
 }
 
+// ── Email notification ────────────────────────────────────────────────────────
+async function sendCompletionEmail(email, found, total, zipUrl) {
+  if (!process.env.RESEND_API_KEY) return
+  try {
+    const body = JSON.stringify({
+      from: 'BusBoard <noreply@busboard.app>',
+      to: email,
+      subject: `Your BusBoard batch is ready — ${found} plates found`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px">
+          <h1 style="color:#C8102E;font-size:28px;margin-bottom:8px">🚌 BusBoard</h1>
+          <h2 style="color:#1a1a1a;font-size:20px;margin-bottom:24px">Your batch is ready to download</h2>
+          <p style="color:#555;font-size:16px">We processed <strong>${total} photos</strong> and successfully identified <strong>${found} registration plates</strong>.</p>
+          <div style="margin:32px 0">
+            <a href="${zipUrl}" style="background:#C8102E;color:white;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px">
+              💾 Download ZIP
+            </a>
+          </div>
+          <p style="color:#999;font-size:13px">This link expires in 24 hours. Unrecognised photos are included in the unprocessed folder inside the ZIP.</p>
+          <hr style="border:none;border-top:1px solid #eee;margin:32px 0">
+          <p style="color:#bbb;font-size:12px">BusBoard — Automatic registration plate reader for bus enthusiasts</p>
+        </div>
+      `
+    })
+
+    await httpsPost('api.resend.com', '/emails', {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Length': Buffer.byteLength(body)
+    }, body)
+
+    console.log(`Email sent to ${email}`)
+  } catch (e) {
+    console.warn('Email failed:', e.message)
+  }
+}
+
+// ── Process a single photo ────────────────────────────────────────────────────
 async function processPhoto(job) {
   const { photoId, jobId, userId, storagePath, originalName } = job.data
   console.log(`Processing: ${originalName}`)
+
+  // Crash recovery — skip if already done
+  const { data: existing } = await supabase
+    .from('photos').select('status').eq('id', photoId).single()
+  if (existing?.status === 'done') {
+    console.log(`Skipping ${originalName} — already processed`)
+    return
+  }
 
   const { data: profile } = await supabase
     .from('profiles').select('filename_format').eq('id', userId).single()
@@ -259,12 +312,11 @@ async function processPhoto(job) {
   const saveExt = (ext === 'heic' || ext === 'heif') ? 'jpg' : ext
 
   const { lat, lon, dateStr, dateShort } = await extractExif(buffer)
-
   const claudeBuf = await toJpegForClaude(buffer, ext)
   const b64       = claudeBuf.toString('base64')
 
-  const reg = await readPlate(b64)
-  console.log(`Plate: ${reg}`)
+  const { reg, error: plateError } = await readPlate(b64)
+  console.log(`Plate: ${reg || plateError}`)
 
   let company = null
   if (needsCompany && reg) {
@@ -284,14 +336,79 @@ async function processPhoto(job) {
     date_str: dateStr,
     address, company, lat, lon,
     status:   reg ? 'done' : 'failed',
-    error:    reg ? null : 'Plate not found',
+    error:    reg ? null : (plateError || 'Plate not readable'),
   }).eq('id', photoId)
 
   await supabase.rpc('increment_job_processed', { job_id: jobId })
-  await new Promise(r => setTimeout(r, 3000))
+  await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY))
   return { reg, newName }
 }
 
+// ── Build and upload ZIP chunks ───────────────────────────────────────────────
+async function buildAndUploadZip(photos, userId, jobId, label, folderName) {
+  const chunks  = []
+  for (let i = 0; i < photos.length; i += ZIP_CHUNK_SIZE) {
+    chunks.push(photos.slice(i, i + ZIP_CHUNK_SIZE))
+  }
+
+  const zipUrls = []
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk  = chunks[ci]
+    const zip    = new JSZip()
+    const folder = zip.folder(folderName)
+
+    for (const photo of chunk) {
+      try {
+        const { data: fileData, error } = await supabase.storage
+          .from('photos').download(photo.storage_path)
+        if (error) continue
+
+        const buf = Buffer.from(await fileData.arrayBuffer())
+
+        if (folderName === 'renamed') {
+          let zipName = photo.new_name
+          let counter = 1
+          while (folder.files[`${folderName}/${zipName}`]) {
+            const parts = photo.new_name.split('.')
+            const ext   = parts.pop()
+            zipName = `${parts.join('.')}_${counter++}.${ext}`
+          }
+          folder.file(zipName, buf)
+          console.log(`ZIP renamed: ${zipName}`)
+        } else {
+          const name = photo.original_name || `photo_${photo.id}.jpg`
+          folder.file(name, buf)
+          console.log(`ZIP unprocessed: ${name}`)
+        }
+      } catch (e) {
+        console.warn('ZIP error:', e.message)
+      }
+    }
+
+    const zipBuffer = await zip.generateAsync({
+      type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 }
+    })
+    const suffix  = chunks.length > 1 ? `_part${ci + 1}of${chunks.length}` : ''
+    const zipFile = `${label}${suffix}.zip`
+    const zipPath = `${userId}/${jobId}/${zipFile}`
+
+    console.log(`Uploading: ${zipFile} (${Math.round(zipBuffer.length / 1024 / 1024)}MB)`)
+
+    const { error: uploadError } = await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
+      contentType: 'application/zip', upsert: true
+    })
+    if (uploadError) { console.error('Upload failed:', uploadError.message); continue }
+
+    const { data: signed } = await supabase.storage.from('photos')
+      .createSignedUrl(zipPath, 60 * 60 * 24 * 7)
+    if (signed?.signedUrl) zipUrls.push(signed.signedUrl)
+  }
+
+  return zipUrls
+}
+
+// ── Finish job ────────────────────────────────────────────────────────────────
 async function finishJob(job) {
   const { jobId, userId } = job.data
   console.log(`Finishing job: ${jobId}`)
@@ -305,91 +422,54 @@ async function finishJob(job) {
   const failed = photos.filter(p => p.status === 'failed')
   const found  = done.length
 
-  // Get user email for ZIP filename
   const { data: userProfile } = await supabase
     .from('profiles').select('email').eq('id', userId).single()
   const userName  = (userProfile?.email || 'user').split('@')[0]
     .replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)
   const dateStamp = new Date().toISOString().slice(0, 10)
-  const zipFile   = `BusBoard_${userName}_${dateStamp}.zip`
-  const zipPath   = `${userId}/${jobId}/${zipFile}`
+  const label     = `BusBoard_${userName}_${dateStamp}`
 
   console.log(`Building ZIP: ${done.length} renamed, ${failed.length} unprocessed`)
 
-  const zip               = new JSZip()
-  const renamedFolder     = zip.folder('renamed')
-  const unprocessedFolder = zip.folder('unprocessed')
+  const renamedUrls     = done.length   > 0 ? await buildAndUploadZip(done,   userId, jobId, `${label}_renamed`,     'renamed')     : []
+  const unprocessedUrls = failed.length > 0 ? await buildAndUploadZip(failed, userId, jobId, `${label}_unprocessed`, 'unprocessed') : []
 
-  for (const photo of done) {
-    try {
-      const { data: fileData, error } = await supabase.storage
-        .from('photos').download(photo.storage_path)
-      if (error) { console.warn('Skip renamed:', photo.new_name, error.message); continue }
-
-      const buf = Buffer.from(await fileData.arrayBuffer())
-
-      let zipName = photo.new_name
-      let counter = 1
-      while (renamedFolder.files[`renamed/${zipName}`]) {
-        const parts = photo.new_name.split('.')
-        const ext   = parts.pop()
-        zipName = `${parts.join('.')}_${counter++}.${ext}`
-      }
-
-      renamedFolder.file(zipName, buf)
-      console.log(`ZIP renamed: ${zipName} (${Math.round(buf.length/1024)}KB)`)
-    } catch (e) {
-      console.warn('ZIP renamed error:', e.message)
-    }
-  }
-
-  for (const photo of failed) {
-    try {
-      const { data: fileData, error } = await supabase.storage
-        .from('photos').download(photo.storage_path)
-      if (error) { console.warn('Skip unprocessed:', photo.original_name, error.message); continue }
-
-      const buf      = Buffer.from(await fileData.arrayBuffer())
-      const baseName = photo.original_name || `photo_${photo.id}.jpg`
-
-      unprocessedFolder.file(baseName, buf)
-      console.log(`ZIP unprocessed: ${baseName} (${Math.round(buf.length/1024)}KB)`)
-    } catch (e) {
-      console.warn('ZIP unprocessed error:', e.message)
-    }
-  }
-
-  console.log('Generating ZIP...')
-  const zipBuffer = await zip.generateAsync({
-    type: 'nodebuffer',
-    compression: 'DEFLATE',
-    compressionOptions: { level: 6 }
-  })
-  console.log(`ZIP: ${Math.round(zipBuffer.length / 1024 / 1024)}MB`)
-
-  const { error: uploadError } = await supabase.storage.from('photos').upload(zipPath, zipBuffer, {
-    contentType: 'application/zip', upsert: true
-  })
-
-  if (uploadError) {
-    console.error('ZIP upload failed:', uploadError.message)
-    throw new Error(`ZIP upload failed: ${uploadError.message}`)
-  }
-
-  const { data: signedUrl } = await supabase.storage.from('photos')
-    .createSignedUrl(zipPath, 60 * 60 * 24 * 7)
+  const zipUrl = renamedUrls[0] || unprocessedUrls[0] || null
 
   await supabase.from('jobs').update({
-    status: 'complete', found,
-    processed: photos.length,
-    zip_url: signedUrl?.signedUrl,
+    status:       'complete',
+    found,
+    processed:    photos.length,
+    zip_url:      zipUrl,
     completed_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    expires_at:   new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
   }).eq('id', jobId)
 
   console.log(`Job ${jobId} complete: ${found}/${photos.length} plates found`)
+
+  if (userProfile?.email && zipUrl) {
+    await sendCompletionEmail(userProfile.email, found, photos.length, zipUrl)
+  }
 }
 
+// ── Timeout checker ───────────────────────────────────────────────────────────
+async function checkTimedOutJobs() {
+  try {
+    const cutoff = new Date(Date.now() - JOB_TIMEOUT_MS).toISOString()
+    const { data: stuckJobs } = await supabase
+      .from('jobs').select('id').eq('status', 'processing').lt('created_at', cutoff)
+
+    if (!stuckJobs?.length) return
+    console.log(`Timing out ${stuckJobs.length} stuck job(s)`)
+    for (const j of stuckJobs) {
+      await supabase.from('jobs').update({ status: 'failed' }).eq('id', j.id)
+    }
+  } catch (e) {
+    console.error('Timeout check error:', e.message)
+  }
+}
+
+// ── Cleanup expired jobs ──────────────────────────────────────────────────────
 async function runCleanup() {
   try {
     const { data: expiredJobs } = await supabase
@@ -405,7 +485,15 @@ async function runCleanup() {
         .from('photos').select('storage_path').eq('job_id', job.id)
       const paths = (photos || []).map(p => p.storage_path).filter(Boolean)
       if (paths.length) await supabase.storage.from('photos').remove(paths)
-      await supabase.storage.from('photos').remove([`${job.user_id}/${job.id}/busboard-renamed.zip`])
+
+      const { data: zipFiles } = await supabase.storage.from('photos')
+        .list(`${job.user_id}/${job.id}`)
+      if (zipFiles?.length) {
+        await supabase.storage.from('photos').remove(
+          zipFiles.map(f => `${job.user_id}/${job.id}/${f.name}`)
+        )
+      }
+
       await supabase.from('jobs').update({ status: 'expired', zip_url: null }).eq('id', job.id)
       console.log(`Expired job ${job.id}`)
     }
@@ -414,6 +502,22 @@ async function runCleanup() {
   }
 }
 
+// ── Crash recovery on startup ─────────────────────────────────────────────────
+async function recoverInterruptedJobs() {
+  try {
+    const { data: stuck } = await supabase
+      .from('photos').select('id').eq('status', 'processing')
+    if (!stuck?.length) return
+    console.log(`Crash recovery: resetting ${stuck.length} stuck photo(s)`)
+    for (const p of stuck) {
+      await supabase.from('photos').update({ status: 'pending' }).eq('id', p.id)
+    }
+  } catch (e) {
+    console.error('Crash recovery error:', e.message)
+  }
+}
+
+// ── Worker ────────────────────────────────────────────────────────────────────
 const worker = new Worker('photo-processing', async (job) => {
   console.log(`Job received: ${job.name}`)
   if (job.name === 'process-photo') return processPhoto(job)
@@ -428,8 +532,10 @@ worker.on('failed',    (job, err) => console.error(`✗ ${job?.name}: ${err.mess
 
 console.log('🚌 BusBoard worker started — waiting for jobs…')
 
+recoverInterruptedJobs()
 runCleanup()
-setInterval(runCleanup, 60 * 60 * 1000)
+checkTimedOutJobs()
+setInterval(() => { runCleanup(); checkTimedOutJobs() }, 60 * 60 * 1000)
 
 process.on('SIGTERM', async () => {
   await worker.close()
