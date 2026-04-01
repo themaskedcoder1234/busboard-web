@@ -253,7 +253,7 @@ async function sendCompletionEmail(email, found, total, zipUrl) {
   if (!process.env.RESEND_API_KEY) return
   try {
     const body = JSON.stringify({
-      from: 'BusBoard <noreply@busboard.app>',
+      from: 'BusBoard <onboarding@resend.dev>',
       to: email,
       subject: `Your BusBoard batch is ready — ${found} plates found`,
       html: `
