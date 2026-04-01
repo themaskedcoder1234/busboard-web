@@ -1,6 +1,5 @@
 'use client'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
 
 export default function DashboardNav({ user }) {
@@ -26,7 +25,7 @@ export default function DashboardNav({ user }) {
           Sign out
         </button>
       </nav>
-      <div className="bg-[#9B0B22] px-6 py-2 flex items-center gap-3">
+      <div className="bg-[#9B0B22] px-4 sm:px-6 py-2 flex items-center gap-3">
         <span className="bg-[#F5C518] text-black font-bold text-sm px-2.5 py-0.5 rounded font-mono tracking-wider">15</span>
         <span className="text-white/60 text-xs tracking-widest uppercase">
           <strong className="text-white/90">BusBoard</strong> &nbsp;·&nbsp; Spot it · Snap it · Save it right
@@ -34,4 +33,4 @@ export default function DashboardNav({ user }) {
       </div>
     </>
   )
-}}
+}
