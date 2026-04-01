@@ -1,15 +1,16 @@
 'use client'
 import Link from 'next/link'
+import FlickrUploadButton from './FlickrUploadButton'
 
 const STATUS_STYLES = {
-  pending:    { dot: 'bg-gray-300',                      label: 'Pending',    text: 'text-gray-500'  },
-  processing: { dot: 'bg-amber-400 animate-pulse',       label: 'Processing', text: 'text-amber-700' },
-  complete:   { dot: 'bg-green-500',                     label: 'Complete',   text: 'text-green-700' },
-  failed:     { dot: 'bg-red-500',                       label: 'Failed',     text: 'text-red-700'   },
-  expired:    { dot: 'bg-gray-300',                      label: 'Expired',    text: 'text-gray-400'  },
+  pending:    { dot: 'bg-gray-300',              label: 'Pending',    text: 'text-gray-500'  },
+  processing: { dot: 'bg-amber-400 animate-pulse', label: 'Processing', text: 'text-amber-700' },
+  complete:   { dot: 'bg-green-500',             label: 'Complete',   text: 'text-green-700' },
+  failed:     { dot: 'bg-red-500',               label: 'Failed',     text: 'text-red-700'   },
+  expired:    { dot: 'bg-gray-300',              label: 'Expired',    text: 'text-gray-400'  },
 }
 
-export default function JobList({ jobs }) {
+export default function JobList({ jobs, flickrConnected }) {
   return (
     <div className="space-y-2">
       {jobs.map(job => {
@@ -20,7 +21,6 @@ export default function JobList({ jobs }) {
         })
         const pct = job.total ? Math.round((job.processed / job.total) * 100) : 0
 
-        // Show time remaining for completed jobs
         let expiryNote = null
         if (job.status === 'complete' && job.expires_at) {
           const msLeft = new Date(job.expires_at) - new Date()
@@ -58,13 +58,14 @@ export default function JobList({ jobs }) {
             </div>
 
             {job.status === 'complete' && (
-              <div className="flex gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
                 {job.zip_url && (
                   <a href={job.zip_url}
                     className="text-xs font-medium bg-gray-900 text-white px-3 py-1.5 rounded-lg hover:bg-gray-700 transition-colors">
                     ↓ ZIP
                   </a>
                 )}
+                <FlickrUploadButton jobId={job.id} hasFlickr={flickrConnected} />
                 <Link href={`/dashboard/jobs/${job.id}`}
                   className="text-xs font-medium border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg hover:border-gray-400 transition-colors">
                   View
