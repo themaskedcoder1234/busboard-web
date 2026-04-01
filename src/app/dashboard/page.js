@@ -10,7 +10,7 @@ export default async function DashboardPage() {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('flickr_username, flickr_user_id, filename_format')
+    .select('flickr_username, flickr_user_id, filename_format, flickr_auto_upload')
     .eq('id', user.id)
     .single()
 
@@ -21,11 +21,11 @@ export default async function DashboardPage() {
     .order('created_at', { ascending: false })
     .limit(10)
 
-  const flickrConnected = !!(profile?.flickr_username)
+  const flickrConnected  = !!(profile?.flickr_username)
+  const flickrAutoUpload = !!(profile?.flickr_auto_upload)
 
   return (
     <div className="space-y-5">
-
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Upload photos</h1>
@@ -36,7 +36,7 @@ export default async function DashboardPage() {
 
       <FilenameFormatBuilder initialFormat={profile?.filename_format || 'reg'} />
 
-      <UploadArea flickrConnected={flickrConnected} />
+      <UploadArea flickrConnected={flickrConnected} flickrAutoUpload={flickrAutoUpload} />
 
       {jobs && jobs.length > 0 && (
         <div>
@@ -44,7 +44,6 @@ export default async function DashboardPage() {
           <JobList jobs={jobs} />
         </div>
       )}
-
     </div>
   )
 }
