@@ -1,6 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase-server'
 import Link from 'next/link'
+import FlickrUploadButton from '@/components/FlickrUploadButton'
 
 export default async function JobPage({ params }) {
   const supabase = createClient()
@@ -8,19 +9,17 @@ export default async function JobPage({ params }) {
   if (!user) redirect('/login')
 
   const { data: job } = await supabase
-    .from('jobs')
-    .select('*')
-    .eq('id', params.id)
-    .eq('user_id', user.id)
-    .single()
-
+    .from('jobs').select('*').eq('id', params.id).eq('user_id', user.id).single()
   if (!job) notFound()
 
   const { data: photos } = await supabase
-    .from('photos')
-    .select('*')
-    .eq('job_id', params.id)
-    .order('created_at', { ascending: true })
+    .from('photos').select('*').eq('job_id', params.id).order('created_at', { ascending: true })
+
+  const { data: profile } = await supabase
+    .from('profiles').select('flickr_username').eq('id', user.id).single()
+  const flickrConnected = !!(profile?.flickr_username)
+
+  const flickrUploaded = photos?.filter(p => p.flickr_id).length || 0
 
   return (
     <div className="space-y-6">
@@ -34,37 +33,58 @@ export default async function JobPage({ params }) {
         <div>
           <h1 className="text-2xl font-bold">Batch results</h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            {new Date(job.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' })}
+            {new Date(job.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' })}
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
           {job.zip_url && (
             <a href={job.zip_url} className="btn-dark text-sm px-4 py-2 inline-flex items-center gap-2">
               💾 Download ZIP
             </a>
           )}
+          {job.status === 'complete' && (
+            <FlickrUploadButton jobId={job.id} hasFlickr={flickrConnected} />
+          )}
+          {job.status === 'expired' && (
+            <span className="text-xs text-gray-400 italic">Files deleted after 24 hours</span>
+          )}
         </div>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total photos', value: job.total },
-          { label: 'Plates found', value: job.found, accent: true },
-          { label: 'Not found', value: (job.total || 0) - (job.found || 0) },
+          { label: 'Total photos',    value: job.total },
+          { label: 'Plates found',    value: job.found,                          accent: true },
+          { label: 'Not found',       value: (job.total || 0) - (job.found || 0) },
+          { label: 'On Flickr',       value: flickrUploaded,                     flickr: true },
         ].map(s => (
           <div key={s.label} className="card text-center">
-            <p className={`text-2xl font-bold ${s.accent ? 'text-[#C8102E]' : 'text-charcoal'}`}>{s.value ?? '—'}</p>
+            <p className={`text-2xl font-bold ${s.accent ? 'text-[#C8102E]' : s.flickr ? 'text-pink-600' : 'text-[#1A1A1A]'}`}>
+              {s.value ?? '—'}
+            </p>
             <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
           </div>
         ))}
       </div>
 
-      {/* Photo grid */}
+      {/* Flickr status note */}
+      {flickrConnected && flickrUploaded > 0 && flickrUploaded < (job.found || 0) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-amber-800">
+            {(job.found || 0) - flickrUploaded} photo{(job.found || 0) - flickrUploaded !== 1 ? 's' : ''} not yet uploaded to Flickr
+          </p>
+          <FlickrUploadButton jobId={job.id} hasFlickr={flickrConnected} />
+        </div>
+      )}
+
+      {/* Photo list */}
       <div className="space-y-2">
         {photos?.map(photo => (
-          <div key={photo.id} className={`card flex items-start gap-3 ${photo.status === 'done' ? 'border-green-200' : photo.status === 'failed' ? 'border-red-100' : ''}`}>
-            <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center text-lg flex-shrink-0">
+          <div key={photo.id} className={`card flex items-start gap-3
+            ${photo.status === 'done'   ? 'border-green-200' : ''}
+            ${photo.status === 'failed' ? 'border-red-100'   : ''}`}>
+            <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center text-lg flex-shrink-0">
               {photo.status === 'done' ? '🚌' : photo.status === 'failed' ? '⚠️' : '⏳'}
             </div>
             <div className="flex-1 min-w-0">
@@ -72,17 +92,18 @@ export default async function JobPage({ params }) {
               {photo.reg ? (
                 <div className="inline-flex items-center gap-1 bg-[#F5C518] border-2 border-yellow-600 rounded px-2 py-0.5 mt-1">
                   <span className="bg-[#003399] text-[#FFD700] text-[6px] font-bold px-1 py-0.5 rounded-sm leading-tight">GB</span>
-                  <span className="font-mono font-bold text-sm tracking-widest text-charcoal">{formatReg(photo.reg)}</span>
+                  <span className="font-mono font-bold text-sm tracking-widest text-[#1A1A1A]">{formatReg(photo.reg)}</span>
                 </div>
               ) : (
                 <p className="text-xs text-red-600 mt-1">{photo.error || 'Plate not found'}</p>
               )}
-              {(photo.date_str || photo.address) && (
+              {(photo.date_str || photo.address || photo.company || photo.flickr_id) && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {photo.date_str && <Chip color="amber">{photo.date_str}</Chip>}
-                  {photo.address && <Chip color="green">{photo.address}</Chip>}
-                  {photo.lat && <Chip color="blue">{Number(photo.lat).toFixed(4)}°, {Number(photo.lon).toFixed(4)}°</Chip>}
-                  {photo.flickr_id && <Chip color="red">On Flickr</Chip>}
+                  {photo.date_str  && <Chip color="amber">{photo.date_str}</Chip>}
+                  {photo.address   && <Chip color="green">{photo.address}</Chip>}
+                  {photo.company   && <Chip color="blue">{photo.company}</Chip>}
+                  {photo.lat       && <Chip color="gray">{Number(photo.lat).toFixed(4)}°, {Number(photo.lon).toFixed(4)}°</Chip>}
+                  {photo.flickr_id && <Chip color="red">📸 On Flickr</Chip>}
                 </div>
               )}
             </div>
@@ -98,6 +119,7 @@ function Chip({ color, children }) {
     amber: 'bg-amber-50 border-amber-200 text-amber-800',
     green: 'bg-green-50 border-green-200 text-green-800',
     blue:  'bg-blue-50 border-blue-200 text-blue-800',
+    gray:  'bg-gray-50 border-gray-200 text-gray-600',
     red:   'bg-red-50 border-red-200 text-[#9B0B22]',
   }
   return (
