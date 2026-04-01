@@ -41,7 +41,7 @@ export default async function DashboardPage() {
       {jobs && jobs.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">Recent batches</h2>
-          <JobList jobs={jobs} />
+          <JobList jobs={jobs} flickrConnected={flickrConnected} />
         </div>
       )}
     </div>
