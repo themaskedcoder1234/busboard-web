@@ -15,10 +15,10 @@ export default function DashboardNav({ user }) {
 
   return (
     <>
-      <nav className="bg-[#C8102E] px-6 h-14 flex items-center gap-3">
-       <a href="/dashboard" className="text-white font-bold tracking-widest text-xl" style={{fontFamily:'monospace'}}>
-  🚌 BUSBOARD
-</a>
+      <nav className="bg-[#C8102E] px-4 sm:px-6 h-14 flex items-center gap-3">
+        <a href="/dashboard" className="text-white font-bold tracking-widest text-lg sm:text-xl" style={{fontFamily:'monospace'}}>
+          🚌 BUSBOARD
+        </a>
         <span className="flex-1" />
         <span className="text-white/60 text-sm hidden sm:block">{user.email}</span>
         <button onClick={signOut}
@@ -34,4 +34,4 @@ export default function DashboardNav({ user }) {
       </div>
     </>
   )
-}
+}}
