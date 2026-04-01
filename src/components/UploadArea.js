@@ -3,44 +3,37 @@ import { useState, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 
 const MAX_FILES = 500
+const SECS_PER_PHOTO = 5  // Rough estimate for time remaining
 
 export default function UploadArea({ flickrConnected }) {
-  const [stagedFiles, setStagedFiles]   = useState([])  // Files waiting to be processed
-  const [dragging, setDragging]         = useState(false)
-  const [jobId, setJobId]               = useState(null)
-  const [stage, setStage]               = useState('idle')  // idle | staging | uploading | processing | done | error
+  const [stagedFiles, setStagedFiles]       = useState([])
+  const [dragging, setDragging]             = useState(false)
+  const [jobId, setJobId]                   = useState(null)
+  const [stage, setStage]                   = useState('idle')
   const [uploadProgress, setUploadProgress] = useState(0)
-  const [processed, setProcessed]       = useState(0)
-  const [found, setFound]               = useState(0)
-  const [error, setError]               = useState('')
-  const [downloadUrl, setDownloadUrl]   = useState(null)
-  const [previews, setPreviews]         = useState([])  // thumbnail URLs
-  const pollRef  = useRef(null)
+  const [processed, setProcessed]           = useState(0)
+  const [found, setFound]                   = useState(0)
+  const [total, setTotal]                   = useState(0)
+  const [error, setError]                   = useState('')
+  const [downloadUrl, setDownloadUrl]       = useState(null)
+  const [previews, setPreviews]             = useState([])
+  const pollRef   = useRef(null)
   const fileInput = useRef()
 
   const reset = () => {
-    setStagedFiles([])
-    setPreviews([])
-    setStage('idle')
-    setJobId(null)
-    setUploadProgress(0)
-    setProcessed(0)
-    setFound(0)
-    setError('')
-    setDownloadUrl(null)
+    setStagedFiles([]); setPreviews([]); setStage('idle'); setJobId(null)
+    setUploadProgress(0); setProcessed(0); setFound(0); setTotal(0)
+    setError(''); setDownloadUrl(null)
     if (pollRef.current) clearInterval(pollRef.current)
-    fileInput.current && (fileInput.current.value = '')
+    if (fileInput.current) fileInput.current.value = ''
   }
 
   const addFiles = useCallback((newFiles) => {
     const arr = Array.from(newFiles)
-    setStagedFiles(prev => {
-      const combined = [...prev, ...arr].slice(0, MAX_FILES)
-      return combined
-    })
-    // Generate previews
+    setStagedFiles(prev => [...prev, ...arr].slice(0, MAX_FILES))
     arr.forEach(file => {
-      if (file.type.startsWith('image/') && !file.name.toLowerCase().match(/\.(heic|heif)$/)) {
+      const isHeic = file.name.toLowerCase().match(/\.(heic|heif)$/)
+      if (file.type.startsWith('image/') && !isHeic) {
         const url = URL.createObjectURL(file)
         setPreviews(prev => [...prev, { name: file.name, url }])
       } else {
@@ -60,23 +53,30 @@ export default function UploadArea({ flickrConnected }) {
     if (stagedFiles.length <= 1) setStage('idle')
   }
 
-  // Drag handlers
   const onDragOver  = e => { e.preventDefault(); setDragging(true) }
   const onDragLeave = () => setDragging(false)
   const onDrop      = e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files) }
   const onPick      = e => { addFiles(e.target.files); e.target.value = '' }
 
+  function timeRemaining(done, tot) {
+    const left = tot - done
+    const secs = left * SECS_PER_PHOTO
+    if (secs < 60) return `~${secs}s remaining`
+    const mins = Math.ceil(secs / 60)
+    return `~${mins} min${mins !== 1 ? 's' : ''} remaining`
+  }
+
   async function startProcessing() {
     if (!stagedFiles.length) return
     setStage('uploading')
     setError('')
+    setTotal(stagedFiles.length)
 
     try {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       const token = session?.access_token
 
-      // Create job
       const jobRes = await fetch('/api/jobs/create', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -85,7 +85,6 @@ export default function UploadArea({ flickrConnected }) {
       const { jobId: newJobId } = await jobRes.json()
       setJobId(newJobId)
 
-      // Upload in chunks of 10
       const CHUNK = 10
       let uploaded = 0
       for (let i = 0; i < stagedFiles.length; i += CHUNK) {
@@ -102,7 +101,6 @@ export default function UploadArea({ flickrConnected }) {
         setUploadProgress(Math.round((uploaded / stagedFiles.length) * 100))
       }
 
-      // Start processing
       await fetch('/api/jobs/start', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -111,7 +109,6 @@ export default function UploadArea({ flickrConnected }) {
 
       setStage('processing')
       startPolling(newJobId, token)
-
     } catch (e) {
       setError(e.message)
       setStage('staging')
@@ -121,9 +118,7 @@ export default function UploadArea({ flickrConnected }) {
   function startPolling(id, token) {
     pollRef.current = setInterval(async () => {
       try {
-        const res  = await fetch(`/api/jobs/${id}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        })
+        const res  = await fetch(`/api/jobs/${id}`, { headers: { 'Authorization': `Bearer ${token}` } })
         const data = await res.json()
         setProcessed(data.processed || 0)
         setFound(data.found || 0)
@@ -137,7 +132,7 @@ export default function UploadArea({ flickrConnected }) {
           setStage('error')
         }
       } catch {}
-    }, 500)
+    }, 1000)
   }
 
   async function uploadToFlickr() {
@@ -158,77 +153,73 @@ export default function UploadArea({ flickrConnected }) {
     }
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────────
-
-  // Done state
+  // ── Done ───────────────────────────────────────────────────────────────────
   if (stage === 'done' || stage === 'flickr-uploading' || stage === 'flickr-done') return (
-    <div className="space-y-4">
-      <div className="card space-y-4">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-green-500" />
-          <p className="text-sm font-semibold text-green-800">Processing complete</p>
-        </div>
-        <div className="flex gap-3 text-sm flex-wrap">
-          <span className="bg-green-50 border border-green-200 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
-            ✓ {found} plates found
-          </span>
-          <span className="bg-gray-50 border border-gray-200 text-gray-600 px-3 py-1 rounded-full text-xs font-medium">
-            {stagedFiles.length} photos processed
-          </span>
-        </div>
-        <div className="flex gap-3 flex-wrap">
-          {downloadUrl && (
-            <a href={downloadUrl} className="btn-dark text-sm px-5 py-2 inline-flex items-center gap-2">
-              💾 Download ZIP
-            </a>
-          )}
-          {flickrConnected && stage !== 'flickr-done' && (
-            <button onClick={uploadToFlickr} disabled={stage === 'flickr-uploading'}
-              className="btn-red text-sm px-5 py-2 inline-flex items-center gap-2">
-              {stage === 'flickr-uploading' ? '⏳ Uploading to Flickr…' : '📸 Upload to Flickr'}
-            </button>
-          )}
-          {stage === 'flickr-done' && (
-            <span className="bg-red-50 border border-red-200 text-[#9B0B22] text-sm px-4 py-2 rounded-lg font-medium">
-              ✓ Uploaded to Flickr
-            </span>
-          )}
-          <button onClick={reset} className="btn-ghost text-sm px-4 py-2">
-            Start new batch
+    <div className="card space-y-4">
+      <div className="flex items-center gap-2">
+        <div className="w-2 h-2 rounded-full bg-green-500" />
+        <p className="text-sm font-semibold text-green-800">Processing complete</p>
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        <span className="bg-green-50 border border-green-200 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
+          ✓ {found} plates found
+        </span>
+        <span className="bg-gray-50 border border-gray-200 text-gray-600 px-3 py-1 rounded-full text-xs font-medium">
+          {total} photos processed
+        </span>
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        {downloadUrl && (
+          <a href={downloadUrl} className="btn-dark text-sm px-4 py-2 inline-flex items-center gap-2">
+            💾 Download ZIP
+          </a>
+        )}
+        {flickrConnected && stage !== 'flickr-done' && (
+          <button onClick={uploadToFlickr} disabled={stage === 'flickr-uploading'}
+            className="btn-red text-sm px-4 py-2 inline-flex items-center gap-2">
+            {stage === 'flickr-uploading' ? '⏳ Uploading…' : '📸 Upload to Flickr'}
           </button>
-        </div>
+        )}
+        {stage === 'flickr-done' && (
+          <span className="bg-red-50 border border-red-200 text-[#9B0B22] text-sm px-4 py-2 rounded-lg font-medium">
+            ✓ Uploaded to Flickr
+          </span>
+        )}
+        <button onClick={reset} className="btn-ghost text-sm px-4 py-2">Start new batch</button>
       </div>
     </div>
   )
 
-  // Uploading / processing state
+  // ── Uploading / Processing ─────────────────────────────────────────────────
   if (stage === 'uploading' || stage === 'processing') return (
     <div className="card space-y-4">
       <div className="flex items-center gap-3">
-        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm
+        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0
           ${stage === 'uploading' ? 'bg-red-50 border border-red-100' : 'bg-amber-50 border border-amber-100 animate-pulse'}`}>
           {stage === 'uploading' ? '⬆' : '🔍'}
         </div>
-        <div>
-          <p className="text-sm font-semibold">
-            {stage === 'uploading' ? `Uploading ${stagedFiles.length} photos…` : 'Reading registration plates…'}
+        <div className="min-w-0">
+          <p className="text-sm font-semibold truncate">
+            {stage === 'uploading' ? `Uploading ${total} photos…` : 'Reading registration plates…'}
           </p>
           <p className="text-xs text-gray-400">
             {stage === 'uploading'
               ? `${uploadProgress}% uploaded`
-              : `${processed} of ${stagedFiles.length} done · ${found} plates found`}
+              : `${processed} of ${total} done · ${found} plates found · ${timeRemaining(processed, total)}`}
           </p>
         </div>
       </div>
-      <ProgressBar value={stage === 'uploading' ? uploadProgress : stagedFiles.length ? Math.round((processed / stagedFiles.length) * 100) : 0}
-        color={stage === 'uploading' ? 'red' : 'amber'} />
+      <ProgressBar
+        value={stage === 'uploading' ? uploadProgress : total ? Math.round((processed / total) * 100) : 0}
+        color={stage === 'uploading' ? 'red' : 'amber'}
+      />
       {stage === 'processing' && (
         <p className="text-xs text-gray-400 text-center">Running in the background — you can leave and come back.</p>
       )}
     </div>
   )
 
-  // Error state
+  // ── Error ──────────────────────────────────────────────────────────────────
   if (stage === 'error') return (
     <div className="card border-red-200 bg-red-50 space-y-3">
       <p className="text-sm font-semibold text-red-800">⚠ {error || 'Something went wrong'}</p>
@@ -236,27 +227,27 @@ export default function UploadArea({ flickrConnected }) {
     </div>
   )
 
-  // Idle state — drop zone
+  // ── Drop zone ──────────────────────────────────────────────────────────────
   const dropZone = (
     <div
       onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
       onClick={() => fileInput.current.click()}
-      className={`relative border-2 border-dashed rounded-xl text-center cursor-pointer transition-all
-        ${stage === 'staging' ? 'p-4' : 'p-12'}
-        ${dragging ? 'border-[#C8102E] bg-red-50' : 'border-[#C8102E]/20 bg-[#C8102E]/[0.02] hover:border-[#C8102E]/40 hover:bg-[#C8102E]/[0.03]'}`}
+      className={`border-2 border-dashed rounded-xl text-center cursor-pointer transition-all
+        ${stage === 'staging' ? 'p-4' : 'p-8 sm:p-12'}
+        ${dragging ? 'border-[#C8102E] bg-red-50' : 'border-[#C8102E]/20 bg-[#C8102E]/[0.02] hover:border-[#C8102E]/40'}`}
     >
       <input ref={fileInput} type="file" accept="image/*,.heic,.heif" multiple className="hidden" onChange={onPick} />
       {stage === 'staging' ? (
         <p className="text-xs text-gray-400">
-          📷 Drop more photos here to add them · <span className="text-[#C8102E]">click to browse</span>
+          📷 Drop more photos here · <span className="text-[#C8102E]">or tap to browse</span>
         </p>
       ) : (
         <>
-          <div className="text-4xl mb-3">📷</div>
-          <h2 className="text-base font-semibold mb-1">Drop your bus photos here</h2>
-          <p className="text-gray-400 text-sm">or click to browse · you can add more before processing</p>
+          <div className="text-3xl sm:text-4xl mb-3">📷</div>
+          <h2 className="text-sm sm:text-base font-semibold mb-1">Drop your bus photos here</h2>
+          <p className="text-gray-400 text-xs sm:text-sm">or tap to browse · add more before processing</p>
           <span className="inline-block mt-3 bg-[#C8102E]/08 border border-[#C8102E]/15 text-[#9B0B22] text-xs px-3 py-1 rounded-full">
-            Up to {MAX_FILES} photos · JPEG &amp; HEIC supported
+            Up to {MAX_FILES} photos · JPEG &amp; HEIC
           </span>
         </>
       )}
@@ -265,45 +256,39 @@ export default function UploadArea({ flickrConnected }) {
 
   if (stage === 'idle') return dropZone
 
-  // Staging state — show thumbnails + process button
+  // ── Staging ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-3">
       {dropZone}
-
-      {/* Thumbnail grid */}
       <div className="card space-y-3">
         <div className="flex items-center justify-between">
           <p className="text-sm font-semibold text-gray-700">
-            {stagedFiles.length} photo{stagedFiles.length !== 1 ? 's' : ''} ready to process
+            {stagedFiles.length} photo{stagedFiles.length !== 1 ? 's' : ''} ready
           </p>
-          <button onClick={reset} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
-            Clear all
-          </button>
+          <button onClick={reset} className="text-xs text-gray-400 hover:text-gray-600">Clear all</button>
         </div>
 
-        <div className="grid grid-cols-6 gap-1.5 max-h-48 overflow-y-auto">
+        {/* Thumbnail grid — 4 cols on mobile, 6 on desktop */}
+        <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5 max-h-48 overflow-y-auto">
           {previews.map((p, i) => (
             <div key={i} className="relative group aspect-square">
               {p.url ? (
-                <img src={p.url} alt={p.name}
-                  className="w-full h-full object-cover rounded-md border border-gray-200" />
+                <img src={p.url} alt={p.name} className="w-full h-full object-cover rounded-md border border-gray-200" />
               ) : (
-                <div className="w-full h-full rounded-md border border-gray-200 bg-gray-50 flex items-center justify-center text-lg">
+                <div className="w-full h-full rounded-md border border-gray-200 bg-gray-50 flex items-center justify-center text-base sm:text-lg">
                   📱
                 </div>
               )}
               <button
-                onClick={() => removeFile(i)}
-                className="absolute -top-1 -right-1 w-4 h-4 bg-gray-700 text-white rounded-full text-[10px] hidden group-hover:flex items-center justify-center leading-none">
+                onClick={e => { e.stopPropagation(); removeFile(i) }}
+                className="absolute -top-1 -right-1 w-4 h-4 bg-gray-700 text-white rounded-full text-[10px] hidden group-hover:flex items-center justify-center">
                 ×
               </button>
             </div>
           ))}
         </div>
 
-        {error && (
-          <p className="text-xs text-red-600">⚠ {error}</p>
-        )}
+        {error && <p className="text-xs text-red-600">⚠ {error}</p>}
 
         <button onClick={startProcessing}
           className="btn-red w-full py-2.5 text-sm font-semibold flex items-center justify-center gap-2">
