@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase-browser'
 const MAX_FILES = 500
 const SECS_PER_PHOTO = 5  // Rough estimate for time remaining
 
-export default function UploadArea({ flickrConnected }) {
+export default function UploadArea({ flickrConnected, flickrAutoUpload }) {
   const [stagedFiles, setStagedFiles]       = useState([])
   const [dragging, setDragging]             = useState(false)
   const [jobId, setJobId]                   = useState(null)
@@ -17,7 +17,7 @@ export default function UploadArea({ flickrConnected }) {
   const [error, setError]                   = useState('')
   const [downloadUrl, setDownloadUrl]       = useState(null)
   const [previews, setPreviews]             = useState([])
-  const pollRef   = useRef(null)
+  const [flickrProgress, setFlickrProgress] = useState({ uploaded: 0, failed: 0, total: 0 })
   const fileInput = useRef()
 
   const reset = () => {
@@ -126,6 +126,10 @@ export default function UploadArea({ flickrConnected }) {
           clearInterval(pollRef.current)
           setDownloadUrl(data.zip_url)
           setStage('done')
+          // Auto-upload to Flickr if enabled
+          if (flickrConnected && flickrAutoUpload) {
+            setTimeout(() => uploadToFlickr(false), 1000)
+          }
         } else if (data.status === 'failed') {
           clearInterval(pollRef.current)
           setError('Processing failed — please try again')
@@ -135,17 +139,20 @@ export default function UploadArea({ flickrConnected }) {
     }, 1000)
   }
 
-  async function uploadToFlickr() {
+  async function uploadToFlickr(retry = false) {
     const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     setStage('flickr-uploading')
+    setFlickrProgress({ uploaded: 0, failed: 0, total: 0 })
     try {
       const res = await fetch('/api/flickr/upload', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId })
+        body: JSON.stringify({ jobId, retryFailed: retry })
       })
       if (!res.ok) throw new Error('Flickr upload failed')
+      const data = await res.json()
+      setFlickrProgress({ uploaded: data.uploaded, failed: data.failed, total: data.total })
       setStage('flickr-done')
     } catch (e) {
       setError(e.message)
@@ -168,22 +175,44 @@ export default function UploadArea({ flickrConnected }) {
           {total} photos processed
         </span>
       </div>
+
+      {/* Flickr upload progress */}
+      {stage === 'flickr-uploading' && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 animate-spin text-[#C8102E]">⟳</div>
+            <p className="text-xs text-gray-600">Uploading to Flickr…</p>
+          </div>
+          <p className="text-xs text-gray-400">This may take a few minutes for large batches</p>
+        </div>
+      )}
+
+      {stage === 'flickr-done' && flickrProgress.total > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 space-y-1">
+          <p className="text-xs font-semibold text-[#9B0B22]">
+            ✓ {flickrProgress.uploaded}/{flickrProgress.total} photos uploaded to Flickr
+          </p>
+          {flickrProgress.failed > 0 && (
+            <p className="text-xs text-red-600">
+              {flickrProgress.failed} failed —{' '}
+              <button onClick={() => uploadToFlickr(true)} className="underline hover:no-underline">
+                retry failed photos
+              </button>
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2 flex-wrap">
         {downloadUrl && (
           <a href={downloadUrl} className="btn-dark text-sm px-4 py-2 inline-flex items-center gap-2">
             💾 Download ZIP
           </a>
         )}
-        {flickrConnected && stage !== 'flickr-done' && (
-          <button onClick={uploadToFlickr} disabled={stage === 'flickr-uploading'}
-            className="btn-red text-sm px-4 py-2 inline-flex items-center gap-2">
-            {stage === 'flickr-uploading' ? '⏳ Uploading…' : '📸 Upload to Flickr'}
+        {flickrConnected && stage === 'done' && (
+          <button onClick={() => uploadToFlickr(false)} className="btn-red text-sm px-4 py-2 inline-flex items-center gap-2">
+            📸 Upload to Flickr
           </button>
-        )}
-        {stage === 'flickr-done' && (
-          <span className="bg-red-50 border border-red-200 text-[#9B0B22] text-sm px-4 py-2 rounded-lg font-medium">
-            ✓ Uploaded to Flickr
-          </span>
         )}
         <button onClick={reset} className="btn-ghost text-sm px-4 py-2">Start new batch</button>
       </div>
