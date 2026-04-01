@@ -10,7 +10,7 @@ export default async function DashboardLayout({ children }) {
   return (
     <div className="min-h-screen flex flex-col">
       <DashboardNav user={user} />
-      <main className="flex-1 max-w-4xl mx-auto w-full px-6 py-8">
+      <main className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-5 sm:py-8">
         {children}
       </main>
       <footer className="bg-[#6B0718] px-6 py-3 flex items-center gap-3">
