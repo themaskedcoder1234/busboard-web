@@ -2,59 +2,84 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
 :root {
-  --red-bus:  #C8102E;
-  --red-dark: #9B0B22;
-  --red-deep: #6B0718;
-  --cream:    #FFF8F0;
-  --gold:     #F5C518;
-  --charcoal: #1A1A1A;
-  --surface:  #FFFFFF;
-  --border:   #E8DDD8;
-  --muted:    #888888;
-  --success:  #1A7A4A;
+  --red-bus:   #C8102E;
+  --red-dark:  #9B0B22;
+  --red-deep:  #6B0718;
+  --cream:     #FDF6EE;
+  --cream-dark:#F5EAD8;
+  --gold:      #F5C518;
+  --gold-dark: #D4A800;
+  --charcoal:  #1A1A1A;
+  --ink:       #2C2C2C;
+  --surface:   #FFFFFF;
+  --border:    #E8DDD8;
+  --muted:     #7A7068;
+  --success:   #1A7A4A;
+  --blind-bg:  #1A1A1A;
+  --blind-text:#F5F0E8;
 }
 
-body { background: #FFF8F0; }
+* { font-family: 'Inter', system-ui, sans-serif; }
+body { background: var(--cream); color: var(--charcoal); }
 
+/* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(200,16,46,0.2); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(200,16,46,0.4); }
 
+/* Destination blind style */
+.blind {
+  background: var(--blind-bg);
+  color: var(--blind-text);
+  font-family: 'Inter', monospace;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Number plate */
+.plate-text {
+  font-family: monospace;
+  letter-spacing: 0.15em;
+}
+
 @layer components {
   .btn-red {
     @apply bg-[#C8102E] hover:bg-[#9B0B22] text-white font-semibold
-           rounded-lg px-5 py-2.5 text-sm transition-colors
+           rounded-lg px-5 py-2.5 text-sm transition-all
            disabled:opacity-40 disabled:cursor-not-allowed;
   }
-
   .btn-dark {
-    @apply bg-gray-900 hover:bg-gray-800 text-white font-semibold
-           rounded-lg px-5 py-2.5 text-sm transition-colors
+    @apply bg-[#1A1A1A] hover:bg-gray-800 text-white font-semibold
+           rounded-lg px-5 py-2.5 text-sm transition-all
            disabled:opacity-40 disabled:cursor-not-allowed;
   }
-
   .btn-ghost {
-    @apply bg-transparent border border-[#E8DDD8] hover:border-[#C8B8B0]
-           text-gray-600 hover:text-gray-900 font-medium
-           rounded-lg px-4 py-2 text-sm transition-colors;
+    @apply bg-transparent border border-[#E8DDD8] hover:border-[#C8102E]/40
+           text-[#7A7068] hover:text-[#1A1A1A] font-medium
+           rounded-lg px-4 py-2 text-sm transition-all;
   }
-
+  .btn-cream {
+    @apply bg-[#FDF6EE] hover:bg-[#F5EAD8] border border-[#E8DDD8]
+           text-[#1A1A1A] font-semibold
+           rounded-lg px-5 py-2.5 text-sm transition-all;
+  }
   .input {
     @apply w-full bg-white border border-[#E8DDD8] focus:border-[#C8102E]
            rounded-lg px-3 py-2.5 text-sm outline-none transition-colors
            placeholder:text-gray-400;
   }
-
   .card {
     @apply bg-white border border-[#E8DDD8] rounded-xl p-4;
   }
-
   .plate {
     @apply inline-flex items-center gap-1
-           bg-[#F5C518] border-2 border-yellow-600
+           bg-[#F5C518] border-2 border-[#D4A800]
            rounded px-2.5 py-0.5 font-mono font-bold
-           text-gray-900 tracking-widest text-base;
+           text-[#1A1A1A] tracking-widest text-base;
   }
 }
