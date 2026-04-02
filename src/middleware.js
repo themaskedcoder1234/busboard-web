@@ -24,7 +24,13 @@ export async function middleware(request) {
     }
   )
 
-  await supabase.auth.getUser()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  // If no valid session and trying to access dashboard, redirect to login
+  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
+    return NextResponse.redirect(new URL('/', request.url))
+  }
+
   return response
 }
 
