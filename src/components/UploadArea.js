@@ -19,6 +19,7 @@ export default function UploadArea({ flickrConnected, flickrAutoUpload }) {
   const [previews, setPreviews]             = useState([])
   const [flickrProgress, setFlickrProgress] = useState({ uploaded: 0, failed: 0, total: 0 })
   const fileInput = useRef()
+  const pollRef = useRef(null)
 
   const reset = () => {
     setStagedFiles([]); setPreviews([]); setStage('idle'); setJobId(null)
