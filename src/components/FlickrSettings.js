@@ -6,6 +6,7 @@ const ALBUM_FORMATS = [
   { id: 'date',     label: 'Date taken',    example: 'Tuesday, 12 October 2021' },
   { id: 'operator', label: 'Operator name', example: 'Stagecoach' },
   { id: 'location', label: 'Location',      example: 'Oxford' },
+  { id: 'custom',   label: 'Custom name',   example: 'My bus photos' },
 ]
 
 const TITLE_FORMATS = [
@@ -21,12 +22,13 @@ const DESC_FORMATS = [
 ]
 
 export default function FlickrSettings({ initialSettings }) {
-  const [autoUpload,   setAutoUpload]   = useState(initialSettings?.flickr_auto_upload   || false)
-  const [albumFormat,  setAlbumFormat]  = useState(initialSettings?.flickr_album_format  || 'date')
-  const [titleFormat,  setTitleFormat]  = useState(initialSettings?.flickr_title_format  || 'reg')
-  const [descFormat,   setDescFormat]   = useState(initialSettings?.flickr_description_format || 'full')
-  const [saving,       setSaving]       = useState(false)
-  const [saved,        setSaved]        = useState(false)
+  const [autoUpload,       setAutoUpload]       = useState(initialSettings?.flickr_auto_upload        || false)
+  const [albumFormat,      setAlbumFormat]      = useState(initialSettings?.flickr_album_format       || 'date')
+  const [albumCustomName,  setAlbumCustomName]  = useState(initialSettings?.flickr_album_custom_name  || '')
+  const [titleFormat,      setTitleFormat]      = useState(initialSettings?.flickr_title_format       || 'reg')
+  const [descFormat,       setDescFormat]       = useState(initialSettings?.flickr_description_format || 'full')
+  const [saving,           setSaving]           = useState(false)
+  const [saved,            setSaved]            = useState(false)
 
   async function save() {
     setSaving(true)
@@ -35,6 +37,7 @@ export default function FlickrSettings({ initialSettings }) {
     await supabase.from('profiles').update({
       flickr_auto_upload:          autoUpload,
       flickr_album_format:         albumFormat,
+      flickr_album_custom_name:    albumCustomName,
       flickr_title_format:         titleFormat,
       flickr_description_format:   descFormat,
     }).eq('id', user.id)
@@ -72,9 +75,22 @@ export default function FlickrSettings({ initialSettings }) {
               ${albumFormat === f.id ? 'border-[#C8102E] bg-red-50' : 'border-gray-200 hover:border-gray-300'}`}>
               <input type="radio" name="album" value={f.id} checked={albumFormat === f.id}
                 onChange={() => setAlbumFormat(f.id)} className="accent-[#C8102E]" />
-              <div>
+              <div className="flex-1">
                 <p className="text-sm font-medium text-gray-700">{f.label}</p>
-                <p className="text-xs text-gray-400 font-mono">{f.example}</p>
+                {f.id !== 'custom' && <p className="text-xs text-gray-400 font-mono">{f.example}</p>}
+                {f.id === 'custom' && albumFormat === 'custom' && (
+                  <input
+                    type="text"
+                    value={albumCustomName}
+                    onChange={e => setAlbumCustomName(e.target.value)}
+                    onClick={e => e.preventDefault()}
+                    placeholder="e.g. My bus photos"
+                    className="mt-1.5 w-full text-xs px-2 py-1.5 rounded border border-gray-300 focus:outline-none focus:border-[#C8102E] bg-white text-gray-700"
+                  />
+                )}
+                {f.id === 'custom' && albumFormat !== 'custom' && (
+                  <p className="text-xs text-gray-400 font-mono">{f.example}</p>
+                )}
               </div>
             </label>
           ))}

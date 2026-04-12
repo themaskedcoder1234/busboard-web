@@ -4,10 +4,15 @@
 create table public.profiles (
   id           uuid references auth.users on delete cascade primary key,
   email        text,
-  flickr_token        text,
-  flickr_token_secret text,
-  flickr_user_id      text,
-  flickr_username     text,
+  flickr_token              text,
+  flickr_token_secret       text,
+  flickr_user_id            text,
+  flickr_username           text,
+  flickr_auto_upload        boolean default false,
+  flickr_album_format       text default 'date',
+  flickr_album_custom_name  text,
+  flickr_title_format       text default 'reg',
+  flickr_description_format text default 'full',
   created_at   timestamptz default now()
 );
 

@@ -107,7 +107,8 @@ async function getOrCreateAlbum(title, primaryPhotoId, userId, key, secret, toke
 }
 
 // Build album title based on user preference
-function buildAlbumTitle(photo, format) {
+function buildAlbumTitle(photo, format, customName) {
+  if (format === 'custom')   return customName || 'BusBoard'
   if (format === 'operator' && photo.company) return photo.company
   if (format === 'location' && photo.address) {
     return photo.address.split(',').map(s => s.trim())[2]
@@ -154,7 +155,7 @@ export async function POST(req) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('flickr_token, flickr_token_secret, flickr_user_id, flickr_album_format, flickr_title_format, flickr_description_format')
+      .select('flickr_token, flickr_token_secret, flickr_user_id, flickr_album_format, flickr_album_custom_name, flickr_title_format, flickr_description_format')
       .eq('id', user.id)
       .single()
 
@@ -181,9 +182,10 @@ export async function POST(req) {
     const secret = process.env.FLICKR_CONSUMER_SECRET
     const { flickr_token: token, flickr_token_secret: tokenSecret, flickr_user_id: flickrUserId } = profile
 
-    const albumFormat = profile.flickr_album_format  || 'date'
-    const titleFormat = profile.flickr_title_format  || 'reg'
-    const descFormat  = profile.flickr_description_format || 'full'
+    const albumFormat     = profile.flickr_album_format      || 'date'
+    const albumCustomName = profile.flickr_album_custom_name || 'BusBoard'
+    const titleFormat     = profile.flickr_title_format      || 'reg'
+    const descFormat      = profile.flickr_description_format || 'full'
 
     const albumCache  = {}
     let uploaded      = 0
@@ -216,7 +218,7 @@ export async function POST(req) {
         )
         console.log(`Flickr: uploaded ${photo.reg} → ${photoId}`)
 
-        const albumTitle = buildAlbumTitle(photo, albumFormat)
+        const albumTitle = buildAlbumTitle(photo, albumFormat, albumCustomName)
         if (!albumCache[albumTitle]) {
           albumCache[albumTitle] = await getOrCreateAlbum(
             albumTitle, photoId, flickrUserId, key, secret, token, tokenSecret
