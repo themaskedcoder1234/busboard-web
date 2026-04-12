@@ -34,7 +34,7 @@ export default async function DashboardPage() {
         <FlickrConnect connected={flickrConnected} username={profile?.flickr_username} />
       </div>
 
-      <FilenameFormatBuilder initialFormat={profile?.filename_format || 'reg'} />
+      <FilenameFormatBuilder initialFormat={profile?.filename_format || 'reg_date_location'} />
 
       <UploadArea flickrConnected={flickrConnected} flickrAutoUpload={flickrAutoUpload} />
 

@@ -300,7 +300,7 @@ async function processPhoto(job) {
 
   const { data: profile } = await supabase
     .from('profiles').select('filename_format').eq('id', userId).single()
-  const format       = profile?.filename_format || 'reg'
+  const format       = profile?.filename_format || 'reg_date_location'
   const needsCompany = format.includes('company')
 
   const { data: fileData, error: dlError } = await supabase.storage

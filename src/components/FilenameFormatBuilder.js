@@ -11,7 +11,7 @@ const PARTS = [
 
 export default function FilenameFormatBuilder({ initialFormat }) {
   const [selected, setSelected] = useState(() => {
-    const parts = (initialFormat || 'reg').split('_')
+    const parts = (initialFormat || 'reg_date_location').split('_')
     return PARTS.map(p => ({ ...p, on: parts.includes(p.id) || p.always }))
   })
   const [saving, setSaving] = useState(false)
