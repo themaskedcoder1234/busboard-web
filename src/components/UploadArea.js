@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase-browser'
 const MAX_FILES = 500
 const SECS_PER_PHOTO = 5  // Rough estimate for time remaining
 
-export default function UploadArea({ flickrConnected, flickrAutoUpload }) {
+export default function UploadArea({ flickrConnected, flickrAutoUpload, tokens = 0 }) {
   const [stagedFiles, setStagedFiles]       = useState([])
   const [dragging, setDragging]             = useState(false)
   const [jobId, setJobId]                   = useState(null)
@@ -102,11 +102,15 @@ export default function UploadArea({ flickrConnected, flickrAutoUpload }) {
         setUploadProgress(Math.round((uploaded / stagedFiles.length) * 100))
       }
 
-      await fetch('/api/jobs/start', {
+      const startRes = await fetch('/api/jobs/start', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: newJobId })
       })
+      if (!startRes.ok) {
+        const err = await startRes.json()
+        throw new Error(err.error || 'Failed to start processing')
+      }
 
       setStage('processing')
       startPolling(newJobId, token)
@@ -320,8 +324,15 @@ export default function UploadArea({ flickrConnected, flickrAutoUpload }) {
 
         {error && <p className="text-xs text-red-600">⚠ {error}</p>}
 
+        <div className={`flex items-center gap-1.5 text-xs ${tokens < stagedFiles.length ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+          <span>🪙</span>
+          <span>{stagedFiles.length} token{stagedFiles.length !== 1 ? 's' : ''} needed · {tokens} available</span>
+          {tokens < stagedFiles.length && <span>— not enough tokens</span>}
+        </div>
+
         <button onClick={startProcessing}
-          className="btn-red w-full py-2.5 text-sm font-semibold flex items-center justify-center gap-2">
+          disabled={tokens < stagedFiles.length}
+          className="btn-red w-full py-2.5 text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
           🔍 Process {stagedFiles.length} photo{stagedFiles.length !== 1 ? 's' : ''}
         </button>
       </div>

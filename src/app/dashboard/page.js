@@ -10,7 +10,7 @@ export default async function DashboardPage() {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('flickr_username, flickr_user_id, filename_format, flickr_auto_upload')
+    .select('flickr_username, flickr_user_id, filename_format, flickr_auto_upload, tokens')
     .eq('id', user.id)
     .single()
 
@@ -23,6 +23,7 @@ export default async function DashboardPage() {
 
   const flickrConnected  = !!(profile?.flickr_username)
   const flickrAutoUpload = !!(profile?.flickr_auto_upload)
+  const tokens           = profile?.tokens ?? 0
 
   return (
     <div className="space-y-5">
@@ -34,9 +35,29 @@ export default async function DashboardPage() {
         <FlickrConnect connected={flickrConnected} username={profile?.flickr_username} />
       </div>
 
+      {tokens === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
+          <span className="text-amber-500 text-base flex-shrink-0">⚠</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-800">No tokens remaining</p>
+            <p className="text-xs text-amber-700 mt-0.5">You need tokens to process photos. Contact an admin to get more.</p>
+          </div>
+        </div>
+      )}
+
+      {tokens > 0 && tokens < 20 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
+          <span className="text-amber-500 text-base flex-shrink-0">⚠</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-800">Low on tokens — {tokens} remaining</p>
+            <p className="text-xs text-amber-700 mt-0.5">Each photo uses 1 token. Contact an admin to top up.</p>
+          </div>
+        </div>
+      )}
+
       <FilenameFormatBuilder initialFormat={profile?.filename_format || 'reg'} />
 
-      <UploadArea flickrConnected={flickrConnected} flickrAutoUpload={flickrAutoUpload} />
+      <UploadArea flickrConnected={flickrConnected} flickrAutoUpload={flickrAutoUpload} tokens={tokens} />
 
       {jobs && jobs.length > 0 && (
         <div>
