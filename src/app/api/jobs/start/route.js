@@ -13,7 +13,6 @@ export async function POST(req) {
 
     const { jobId } = await req.json()
 
-    // Verify job belongs to user
     const { data: job } = await supabase
       .from('jobs')
       .select('id, user_id')
@@ -22,30 +21,56 @@ export async function POST(req) {
       .single()
     if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
 
-    // Get all photos for this job
     const { data: photos } = await supabase
       .from('photos')
       .select('id, storage_path, original_name')
       .eq('job_id', jobId)
 
-    // Update job to processing
+    // Check token balance
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('tokens')
+      .eq('id', user.id)
+      .single()
+
+    const available = profile?.tokens ?? 0
+    const required  = photos.length
+
+    if (available < required) {
+      await supabase.from('jobs').update({ status: 'failed' }).eq('id', jobId)
+      return NextResponse.json(
+        { error: `Not enough tokens. You have ${available} but need ${required}.`, tokens: available, required },
+        { status: 402 }
+      )
+    }
+
+    // Deduct tokens
+    await supabase
+      .from('profiles')
+      .update({ tokens: available - required })
+      .eq('id', user.id)
+
+    await supabase.from('token_transactions').insert({
+      user_id:  user.id,
+      amount:   -required,
+      reason:   `Job ${jobId} — ${required} photo${required !== 1 ? 's' : ''}`,
+    })
+
     await supabase
       .from('jobs')
       .update({ status: 'processing' })
       .eq('id', jobId)
 
-    // Add each photo as a queue job
     for (const photo of photos) {
       await photoQueue.add('process-photo', {
-        photoId:     photo.id,
+        photoId:      photo.id,
         jobId,
-        userId:      user.id,
-        storagePath: photo.storage_path,
+        userId:       user.id,
+        storagePath:  photo.storage_path,
         originalName: photo.original_name,
       }, { jobId: photo.id })
     }
 
-    // Add a final "finish" job that runs after all photos
     await photoQueue.add('finish-job', { jobId, userId: user.id, total: photos.length },
       { delay: 1000, priority: 10 })
 

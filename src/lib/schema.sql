@@ -82,3 +82,22 @@ create policy "Users can read own photos"
 -- ── Storage bucket ────────────────────────────────────────────────────────────
 -- Run this separately in the Supabase dashboard → Storage → New bucket
 -- Name: "photos", Public: false
+
+-- ── Token system (run after initial setup) ────────────────────────────────────
+alter table public.profiles
+  add column if not exists tokens   int     default 0     not null,
+  add column if not exists is_admin boolean default false not null;
+
+create table if not exists public.token_transactions (
+  id         uuid default gen_random_uuid() primary key,
+  user_id    uuid references auth.users on delete cascade not null,
+  amount     int  not null,
+  reason     text,
+  created_by uuid references auth.users,
+  created_at timestamptz default now()
+);
+
+alter table public.token_transactions enable row level security;
+
+create policy "Users can read own token transactions"
+  on public.token_transactions for select using (auth.uid() = user_id);

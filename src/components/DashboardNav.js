@@ -2,7 +2,7 @@
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 
-export default function DashboardNav({ user }) {
+export default function DashboardNav({ user, tokens = 0, isAdmin = false }) {
   const router = useRouter()
 
   async function signOut() {
@@ -23,7 +23,17 @@ export default function DashboardNav({ user }) {
           <span className="text-white font-black tracking-widest text-base sm:text-lg font-mono">BUSBOARD</span>
         </a>
         <span className="flex-1" />
-        <span className="text-white/50 text-xs hidden sm:block truncate max-w-[200px]">{user.email}</span>
+        <span className="text-white/50 text-xs hidden sm:block truncate max-w-[160px]">{user.email}</span>
+        <div className="bg-white/10 border border-white/20 text-white text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 flex-shrink-0">
+          <span className="font-mono font-bold tabular-nums">{tokens}</span>
+          <span className="text-white/60 hidden sm:inline">tokens</span>
+        </div>
+        {isAdmin && (
+          <a href="/dashboard/admin"
+            className="bg-[#F5C518] text-[#1A1A1A] font-bold text-xs px-3 py-1.5 rounded-lg hover:bg-[#D4A800] transition-colors flex-shrink-0">
+            Admin
+          </a>
+        )}
         <a href="/dashboard/settings"
           className="bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors">
           Settings
