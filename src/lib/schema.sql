@@ -88,6 +88,38 @@ alter table public.profiles
   add column if not exists tokens   int     default 0     not null,
   add column if not exists is_admin boolean default false not null;
 
+-- ── Subscription tiers (Phase 1) ──────────────────────────────────────────────
+-- Run this in the Supabase SQL editor after the initial setup above.
+
+CREATE TABLE IF NOT EXISTS subscription_tiers (
+  tier                TEXT PRIMARY KEY,
+  monthly_tokens      INTEGER NOT NULL,
+  price_gbp           NUMERIC(6,2) NOT NULL,
+  escalation_enabled  BOOLEAN NOT NULL DEFAULT false,
+  description         TEXT
+);
+
+INSERT INTO subscription_tiers (tier, monthly_tokens, price_gbp, escalation_enabled, description)
+VALUES
+  ('free',   50,    0.00, false, '50 photos/month, Haiku only'),
+  ('basic',  500,   8.00, false, '500 photos/month, Haiku only'),
+  ('pro',    5000,  19.00, true, '5,000 photos/month, Haiku + Sonnet escalation'),
+  ('fleet',  99999, 49.00, true, 'Unlimited photos, Haiku + Sonnet escalation')
+ON CONFLICT (tier) DO UPDATE
+  SET monthly_tokens      = EXCLUDED.monthly_tokens,
+      price_gbp           = EXCLUDED.price_gbp,
+      escalation_enabled  = EXCLUDED.escalation_enabled,
+      description         = EXCLUDED.description;
+
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS subscription_tier TEXT NOT NULL DEFAULT 'free'
+    REFERENCES subscription_tiers(tier),
+  ADD COLUMN IF NOT EXISTS tokens_used INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS tokens_reset_at TIMESTAMPTZ NOT NULL DEFAULT date_trunc('month', now()),
+  ADD COLUMN IF NOT EXISTS subscription_started_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_profiles_tier ON profiles(subscription_tier);
+
 create table if not exists public.token_transactions (
   id         uuid default gen_random_uuid() primary key,
   user_id    uuid references auth.users on delete cascade not null,

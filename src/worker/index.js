@@ -17,8 +17,48 @@ const supabase = createClient(
 // ── Constants ─────────────────────────────────────────────────────────────────
 const JOB_TIMEOUT_MS   = 30 * 60 * 1000  // 30 minutes
 const ZIP_CHUNK_SIZE   = 50              // Max photos per ZIP chunk
-const RATE_LIMIT_DELAY = 3000
 const RATE_LIMIT_RETRY = 15000
+
+// ── Tier limits (mirrors lib/tokens.js for worker-side token checks) ──────────
+const TIER_LIMITS = { free: 50, basic: 500, pro: 5000, fleet: 99999 }
+
+// ── Token helpers (inline for CJS worker context) ─────────────────────────────
+async function getTokenStatus(userId) {
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('subscription_tier, tokens_used, tokens_reset_at')
+    .eq('id', userId)
+    .single()
+
+  if (!profile) throw new Error('Could not fetch profile')
+
+  const tier = profile.subscription_tier ?? 'free'
+  const limit = TIER_LIMITS[tier] ?? TIER_LIMITS.free
+  const resetAt = new Date(profile.tokens_reset_at)
+  const now = new Date()
+
+  if (now >= resetAt) {
+    const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+    await supabase
+      .from('profiles')
+      .update({ tokens_used: 0, tokens_reset_at: nextReset.toISOString() })
+      .eq('id', userId)
+    return { tier, used: 0, limit, remaining: limit }
+  }
+
+  const used = profile.tokens_used ?? 0
+  return { tier, used, limit, remaining: Math.max(0, limit - used) }
+}
+
+async function deductToken(userId) {
+  const status = await getTokenStatus(userId)
+  if (status.remaining < 1) return false
+  const { error } = await supabase
+    .from('profiles')
+    .update({ tokens_used: status.used + 1 })
+    .eq('id', userId)
+  return !error
+}
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 function httpsGet(url, headers = {}) {
@@ -49,103 +89,130 @@ function httpsPost(hostname, path, headers, body) {
 }
 
 // ── Claude API ────────────────────────────────────────────────────────────────
-async function callClaude(imageBase64, prompt, maxTokens = 32) {
+const PLATE_SYSTEM_PROMPT = `You are a UK vehicle number plate recognition specialist for BusBoard, a photo management app for bus and coach enthusiasts.
+
+Your job is to extract the registration number from photos of buses and coaches.
+
+Always respond with valid JSON only. No markdown, no explanation, just JSON.
+
+Response format:
+{
+  "plate": "AB12 CDE",
+  "confidence": "high" | "medium" | "low",
+  "reason": "brief note if confidence is not high"
+}
+
+Rules:
+- Return the plate in standard UK format with a space in the middle
+- If no plate is visible, return { "plate": null, "confidence": "low", "reason": "no plate visible" }
+- confidence "high" = clear, unambiguous read
+- confidence "medium" = readable but partially obscured or at an angle
+- confidence "low" = guessed, blurry, or very partial`
+
+async function callPlateModel(model, imageBase64) {
   const body = JSON.stringify({
-    model: 'claude-sonnet-4-6',
-    max_tokens: maxTokens,
+    model,
+    max_tokens: 150,
+    system: [
+      {
+        type: 'text',
+        text: PLATE_SYSTEM_PROMPT,
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
     messages: [{
       role: 'user',
       content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
-        { type: 'text', text: prompt }
-      ]
-    }]
+        { type: 'text', text: 'Extract the bus or coach registration plate from this image.' },
+      ],
+    }],
   })
 
   const res = await httpsPost('api.anthropic.com', '/v1/messages', {
     'Content-Type': 'application/json',
     'x-api-key': process.env.ANTHROPIC_API_KEY,
     'anthropic-version': '2023-06-01',
-    'Content-Length': Buffer.byteLength(body)
+    'anthropic-beta': 'prompt-caching-2024-07-31',
+    'Content-Length': Buffer.byteLength(body),
   }, body)
 
   if (res.status === 429) {
     console.warn('Rate limited — waiting 15s before retry')
     await new Promise(r => setTimeout(r, RATE_LIMIT_RETRY))
-    return callClaude(imageBase64, prompt, maxTokens)
+    return callPlateModel(model, imageBase64)
   }
 
   if (res.status !== 200) {
-    console.warn('Claude error:', res.body.slice(0, 200))
-    return null
+    console.warn(`Claude ${model} error:`, res.body.slice(0, 200))
+    return { plate: null, confidence: 'low', reason: 'API error' }
   }
+
   const data = JSON.parse(res.body)
-  return data.content?.find(b => b.type === 'text')?.text?.trim() || null
+  const text = data.content?.find(b => b.type === 'text')?.text?.trim() || ''
+  try {
+    const parsed = JSON.parse(text)
+    return {
+      plate:      parsed.plate      ?? null,
+      confidence: parsed.confidence ?? 'low',
+      reason:     parsed.reason,
+    }
+  } catch {
+    return { plate: null, confidence: 'low', reason: 'Failed to parse model response' }
+  }
 }
 
-// ── Plate reading with descriptive errors ─────────────────────────────────────
-function isValidUKPlate(reg) {
-  if (!reg || reg === 'UNKNOWN') return false
-  const formats = [
-    /^[A-Z]{2}\d{2}[A-Z]{3}$/,
-    /^[A-Z]\d{3}[A-Z]{3}$/,
-    /^[A-Z]{3}\d{3}[A-Z]$/,
-    /^[A-Z]{2}\d{2}[A-Z]{2}$/,
-    /^[A-Z]{1,3}\d{1,4}$/,
-    /^\d{1,4}[A-Z]{1,3}$/,
-  ]
-  return formats.some(f => f.test(reg))
+// ── Plate reading: Haiku first, escalate to Sonnet for pro/fleet ──────────────
+const UK_PLATE_RE = /^[A-Z]{2}\d{2}[A-Z]{3}$|^[A-Z]\d{3}[A-Z]{3}$|^[A-Z]{3}\d{3}[A-Z]$|^[A-Z]{2}\d{2}[A-Z]{2}$|^[A-Z]{1,3}\d{1,4}$|^\d{1,4}[A-Z]{1,3}$/
+
+function isValidUKPlate(plate) {
+  if (!plate) return false
+  return UK_PLATE_RE.test(plate.replace(/\s/g, '').toUpperCase())
 }
 
-async function readPlate(imageBase64) {
-  const prompt1 = `You are an expert UK vehicle registration plate reader.
+async function recognisePlate(imageBase64, tier) {
+  const haikuResult = await callPlateModel('claude-haiku-4-5-20251001', imageBase64)
 
-Find the registration plate in this bus/vehicle image.
-- Front plates: white background
-- Rear plates: yellow background
-- Modern format (most common): AB12CDE e.g. LJ20BKA, YN16NZC
-- Older formats: A123BCD or ABC123D
+  const shouldEscalate =
+    (tier === 'pro' || tier === 'fleet') &&
+    (haikuResult.confidence === 'low' ||
+      haikuResult.confidence === 'medium' ||
+      haikuResult.plate === null ||
+      !isValidUKPlate(haikuResult.plate))
 
-Look carefully at all edges and corners. Characters 0/O, 1/I, 8/B, 5/S can look similar.
-
-Reply ONLY with one of:
-REG:AB12CDE  — if you can read a plate
-REG:OBSCURED — if there is a plate but it is blocked or blurry
-REG:DARK     — if the image is too dark to read
-REG:NOPLATE  — if there is no plate visible in the image
-REG:UNKNOWN  — if you cannot determine why it is unreadable`
-
-  const text1 = await callClaude(imageBase64, prompt1)
-  if (text1) {
-    const match = text1.match(/REG:([A-Z0-9]+)/i)
-    if (match) {
-      const reg = match[1].toUpperCase()
-      if (isValidUKPlate(reg))  return { reg, error: null }
-      if (reg === 'OBSCURED')   return { reg: null, error: 'Plate obscured or blurry' }
-      if (reg === 'DARK')       return { reg: null, error: 'Image too dark to read plate' }
-      if (reg === 'NOPLATE')    return { reg: null, error: 'No plate visible in image' }
-      if (reg !== 'UNKNOWN')    console.log(`Invalid format: ${reg}, retrying...`)
-    }
+  if (!shouldEscalate) {
+    return { ...haikuResult, model: 'haiku', escalated: false }
   }
 
-  // Second attempt
-  const text2 = await callClaude(imageBase64,
-    `Find the number plate on this vehicle. Reply ONLY: REG:XXXXXXX or REG:UNKNOWN`)
-  if (text2) {
-    const match = text2.match(/REG:([A-Z0-9]{2,8})/i)
-    if (match && match[1] !== 'UNKNOWN') {
-      return { reg: match[1].toUpperCase(), error: null }
-    }
-  }
-
-  return { reg: null, error: 'Plate not readable' }
+  console.log(`[plate] Escalating to Sonnet (Haiku confidence: ${haikuResult.confidence})`)
+  const sonnetResult = await callPlateModel('claude-sonnet-4-6', imageBase64)
+  return { ...sonnetResult, model: 'sonnet', escalated: true }
 }
 
 // ── Company detection ─────────────────────────────────────────────────────────
 async function identifyCompany(imageBase64) {
-  const text = await callClaude(imageBase64,
-    `What bus/coach company is shown? Reply ONLY: COMPANY:Name or COMPANY:Unknown`, 24)
-  if (!text) return null
+  const body = JSON.stringify({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 24,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+        { type: 'text', text: 'What bus/coach company is shown? Reply ONLY: COMPANY:Name or COMPANY:Unknown' },
+      ],
+    }],
+  })
+
+  const res = await httpsPost('api.anthropic.com', '/v1/messages', {
+    'Content-Type': 'application/json',
+    'x-api-key': process.env.ANTHROPIC_API_KEY,
+    'anthropic-version': '2023-06-01',
+    'Content-Length': Buffer.byteLength(body),
+  }, body)
+
+  if (res.status !== 200) return null
+  const data = JSON.parse(res.body)
+  const text = data.content?.find(b => b.type === 'text')?.text?.trim() || ''
   const match = text.match(/COMPANY:([^,\n]+)/i)
   const company = match ? match[1].trim() : null
   return company && company.toLowerCase() !== 'unknown' ? company : null
@@ -287,8 +354,8 @@ async function sendCompletionEmail(email, found, total, zipUrl) {
 
 // ── Process a single photo ────────────────────────────────────────────────────
 async function processPhoto(job) {
-  const { photoId, jobId, userId, storagePath, originalName } = job.data
-  console.log(`Processing: ${originalName}`)
+  const { photoId, jobId, userId, storagePath, originalName, tier = 'free' } = job.data
+  console.log(`Processing: ${originalName} (tier: ${tier})`)
 
   // Crash recovery — skip if already done
   const { data: existing } = await supabase
@@ -296,6 +363,12 @@ async function processPhoto(job) {
   if (existing?.status === 'done') {
     console.log(`Skipping ${originalName} — already processed`)
     return
+  }
+
+  // Check token availability before doing any work
+  const tokenStatus = await getTokenStatus(userId)
+  if (tokenStatus.remaining < 1) {
+    throw new Error('INSUFFICIENT_TOKENS')
   }
 
   const { data: profile } = await supabase
@@ -315,8 +388,10 @@ async function processPhoto(job) {
   const claudeBuf = await toJpegForClaude(buffer, ext)
   const b64       = claudeBuf.toString('base64')
 
-  const { reg, error: plateError } = await readPlate(b64)
-  console.log(`Plate: ${reg || plateError}`)
+  // Tier-aware plate recognition: Haiku first, escalate to Sonnet for pro/fleet
+  const result = await recognisePlate(b64, tier)
+  const reg = result.plate ? result.plate.replace(/\s/g, '') : null
+  console.log(`Plate: ${reg || result.reason || 'unreadable'} (${result.model}${result.escalated ? ', escalated' : ''})`)
 
   let company = null
   if (needsCompany && reg) {
@@ -336,11 +411,17 @@ async function processPhoto(job) {
     date_str: dateStr,
     address, company, lat, lon,
     status:   reg ? 'done' : 'failed',
-    error:    reg ? null : (plateError || 'Plate not readable'),
+    error:    reg ? null : (result.reason || 'Plate not readable'),
   }).eq('id', photoId)
 
+  // Deduct 1 token after successful processing (regardless of escalation)
+  await deductToken(userId)
+
+  if (result.escalated) {
+    console.log(`[worker] Sonnet escalation used for user ${userId}, file ${originalName}`)
+  }
+
   await supabase.rpc('increment_job_processed', { job_id: jobId })
-  await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY))
   return { reg, newName }
 }
 
@@ -517,14 +598,18 @@ async function recoverInterruptedJobs() {
   }
 }
 
-// ── Worker ────────────────────────────────────────────────────────────────────
+// ── Worker — concurrency 10, rate-limited to 40 jobs/min ─────────────────────
 const worker = new Worker('photo-processing', async (job) => {
   console.log(`Job received: ${job.name}`)
   if (job.name === 'process-photo') return processPhoto(job)
   if (job.name === 'finish-job')    return finishJob(job)
 }, {
   connection,
-  concurrency: 1,
+  concurrency: 10,
+  limiter: {
+    max: 40,
+    duration: 60_000,
+  },
 })
 
 worker.on('completed', job => console.log(`✓ ${job.name} ${job.id}`))
