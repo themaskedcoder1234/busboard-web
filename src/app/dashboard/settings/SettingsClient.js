@@ -2,9 +2,41 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
+import Link from 'next/link'
 
-export default function SettingsClient({ user, stats }) {
+const TIER_INFO = {
+  free:  { label: 'Free',  colour: 'bg-gray-100 text-gray-700',        price: '£0/mo',   model: 'Haiku',          escalation: false },
+  basic: { label: 'Basic', colour: 'bg-blue-50 text-blue-700',          price: '£8/mo',   model: 'Haiku',          escalation: false },
+  pro:   { label: 'Pro',   colour: 'bg-[#C8102E]/10 text-[#C8102E]',   price: '£19/mo',  model: 'Haiku + Sonnet', escalation: true  },
+  fleet: { label: 'Fleet', colour: 'bg-[#1A1A1A] text-[#F5C518]',       price: '£49/mo',  model: 'Haiku + Sonnet', escalation: true  },
+}
+
+export default function SettingsClient({ user, stats, subscription, hasStripeCustomer, subscriptionSuccess }) {
   const router = useRouter()
+  const { tier = 'free', limit = 50, used = 0, remaining = 50, resetAt } = subscription ?? {}
+  const info = TIER_INFO[tier] ?? TIER_INFO.free
+  const pct  = Math.min(100, Math.round((used / limit) * 100))
+
+  const [portalLoading, setPortalLoading] = useState(false)
+  const [portalError, setPortalError]     = useState('')
+
+  async function openBillingPortal() {
+    setPortalLoading(true)
+    setPortalError('')
+    try {
+      const res = await fetch('/api/stripe/portal', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) { setPortalError(data.error || 'Could not open billing portal'); setPortalLoading(false); return }
+      window.location.href = data.url
+    } catch {
+      setPortalError('Could not open billing portal')
+      setPortalLoading(false)
+    }
+  }
+
+  const resetDate = resetAt
+    ? new Date(resetAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+    : null
 
   // Password change state
   const [newPassword, setNewPassword]     = useState('')
@@ -72,9 +104,103 @@ export default function SettingsClient({ user, stats }) {
   return (
     <div className="space-y-6 max-w-2xl">
 
+      {subscriptionSuccess && (
+        <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-start gap-3">
+          <span className="text-green-600 text-lg leading-none">✓</span>
+          <div>
+            <p className="text-sm font-semibold text-green-800">Subscription activated</p>
+            <p className="text-xs text-green-700 mt-0.5">
+              Welcome to {info.label}! Your photo allowance has been updated.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Account settings</h1>
         <p className="text-gray-500 text-sm mt-0.5">{user.email}</p>
+      </div>
+
+      {/* ── Subscription ─────────────────────────────────────────── */}
+      <div className="card space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-gray-900">Subscription</h2>
+          <Link href="/pricing" className="text-xs text-[#C8102E] font-medium hover:underline">
+            View all plans →
+          </Link>
+        </div>
+
+        {/* Tier row */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className={`text-xs font-black tracking-widest uppercase font-mono px-2.5 py-1 rounded ${info.colour}`}>
+            {info.label}
+          </span>
+          <span className="text-sm text-gray-700 font-medium">{info.price}</span>
+          <span className="text-xs text-gray-400">·</span>
+          <span className="text-xs text-gray-500">{info.model}{info.escalation ? ' with escalation' : ''}</span>
+        </div>
+
+        {/* Token usage */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-gray-600 font-medium">
+              {used.toLocaleString()} / {limit >= 99999 ? 'Unlimited' : limit.toLocaleString()} photos used
+            </span>
+            <span className={`font-bold tabular-nums ${remaining === 0 ? 'text-red-600' : remaining <= Math.max(5, Math.round(limit * 0.1)) ? 'text-amber-600' : 'text-gray-500'}`}>
+              {remaining.toLocaleString()} remaining
+            </span>
+          </div>
+          {limit < 99999 && (
+            <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-400' : 'bg-[#C8102E]'}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          )}
+          {resetDate && (
+            <p className="text-xs text-gray-400">Resets on {resetDate}</p>
+          )}
+        </div>
+
+        {/* Features summary */}
+        <div className="bg-gray-50 rounded-xl px-3 py-3 space-y-1.5">
+          {[
+            { label: 'Monthly photos',    value: limit >= 99999 ? 'Unlimited' : limit.toLocaleString() },
+            { label: 'AI model',          value: info.model },
+            { label: 'Sonnet escalation', value: info.escalation ? 'Included' : 'Not included' },
+            { label: 'Batch processing',  value: (tier === 'pro' || tier === 'fleet') ? 'Included (200+ photos)' : 'Not included' },
+          ].map(row => (
+            <div key={row.label} className="flex items-center justify-between">
+              <span className="text-xs text-gray-500">{row.label}</span>
+              <span className={`text-xs font-medium ${row.value === 'Not included' ? 'text-gray-400' : 'text-gray-800'}`}>
+                {row.value}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {hasStripeCustomer ? (
+          <div className="space-y-2">
+            <button
+              onClick={openBillingPortal}
+              disabled={portalLoading}
+              className="w-full block text-center bg-gray-100 text-gray-700 text-xs font-bold py-2.5 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+              {portalLoading ? 'Opening…' : 'Manage subscription'}
+            </button>
+            {portalError && <p className="text-xs text-red-600 text-center">⚠ {portalError}</p>}
+          </div>
+        ) : tier === 'free' ? (
+          <Link href="/pricing"
+            className="block text-center bg-[#C8102E] text-white text-xs font-bold py-2.5 rounded-xl hover:bg-[#9B0B22] transition-colors">
+            Upgrade plan
+          </Link>
+        ) : (
+          <Link href="/pricing"
+            className="block text-center bg-gray-100 text-gray-700 text-xs font-bold py-2.5 rounded-xl hover:bg-gray-200 transition-colors">
+            View upgrade options
+          </Link>
+        )}
       </div>
 
       {/* ── Usage Statistics ─────────────────────────────────────── */}

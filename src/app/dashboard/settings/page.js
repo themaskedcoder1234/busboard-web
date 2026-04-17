@@ -2,17 +2,21 @@ import { createClient } from '@/lib/supabase-server'
 import SettingsClient from './SettingsClient'
 import FlickrSettings from '@/components/FlickrSettings'
 
-export default async function SettingsPage() {
+const TIER_LIMITS = { free: 50, basic: 500, pro: 5000, fleet: 99999 }
+
+export default async function SettingsPage({ searchParams }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
+  const subscriptionSuccess = searchParams?.subscription === 'success'
+
   const { data: profile } = await supabase
     .from('profiles')
-    .select('flickr_username, flickr_auto_upload, flickr_album_format, flickr_title_format, flickr_description_format')
+    .select('flickr_username, flickr_auto_upload, flickr_album_format, flickr_title_format, flickr_description_format, subscription_tier, tokens_used, tokens_reset_at, stripe_customer_id')
     .eq('id', user.id)
     .single()
 
-  // Fetch usage stats
+  // Usage stats
   const { data: jobs } = await supabase
     .from('jobs')
     .select('id, status, found, processed, created_at')
@@ -48,11 +52,25 @@ export default async function SettingsPage() {
     .sort(([,a],[,b]) => b - a).slice(0, 5)
     .map(([name, count]) => ({ name, count }))
 
+  const tier      = profile?.subscription_tier ?? 'free'
+  const limit     = TIER_LIMITS[tier] ?? 50
+  const used      = profile?.tokens_used ?? 0
+  const remaining = Math.max(0, limit - used)
+  const resetAt   = profile?.tokens_reset_at ?? null
+
+  const subscription = { tier, limit, used, remaining, resetAt }
   const stats = { totalJobs, totalPhotos, totalFound, successRate, topOperators, topLocations }
+  const hasStripeCustomer = !!profile?.stripe_customer_id
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <SettingsClient user={user} stats={stats} />
+      <SettingsClient
+        user={user}
+        stats={stats}
+        subscription={subscription}
+        hasStripeCustomer={hasStripeCustomer}
+        subscriptionSuccess={subscriptionSuccess}
+      />
       {profile?.flickr_username && (
         <FlickrSettings initialSettings={profile} />
       )}
