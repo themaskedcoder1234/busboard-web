@@ -133,3 +133,11 @@ alter table public.token_transactions enable row level security;
 
 create policy "Users can read own token transactions"
   on public.token_transactions for select using (auth.uid() = user_id);
+
+-- ── Stripe integration (run after subscription tiers setup) ───────────────────
+-- Add Stripe customer + subscription tracking columns to profiles
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS stripe_customer_id     TEXT,
+  ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_profiles_stripe_customer ON profiles(stripe_customer_id);

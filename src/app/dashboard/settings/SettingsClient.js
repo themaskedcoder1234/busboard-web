@@ -11,11 +11,28 @@ const TIER_INFO = {
   fleet: { label: 'Fleet', colour: 'bg-[#1A1A1A] text-[#F5C518]',       price: '£49/mo',  model: 'Haiku + Sonnet', escalation: true  },
 }
 
-export default function SettingsClient({ user, stats, subscription }) {
+export default function SettingsClient({ user, stats, subscription, hasStripeCustomer, subscriptionSuccess }) {
   const router = useRouter()
   const { tier = 'free', limit = 50, used = 0, remaining = 50, resetAt } = subscription ?? {}
   const info = TIER_INFO[tier] ?? TIER_INFO.free
   const pct  = Math.min(100, Math.round((used / limit) * 100))
+
+  const [portalLoading, setPortalLoading] = useState(false)
+  const [portalError, setPortalError]     = useState('')
+
+  async function openBillingPortal() {
+    setPortalLoading(true)
+    setPortalError('')
+    try {
+      const res = await fetch('/api/stripe/portal', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) { setPortalError(data.error || 'Could not open billing portal'); setPortalLoading(false); return }
+      window.location.href = data.url
+    } catch {
+      setPortalError('Could not open billing portal')
+      setPortalLoading(false)
+    }
+  }
 
   const resetDate = resetAt
     ? new Date(resetAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -87,6 +104,18 @@ export default function SettingsClient({ user, stats, subscription }) {
   return (
     <div className="space-y-6 max-w-2xl">
 
+      {subscriptionSuccess && (
+        <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-start gap-3">
+          <span className="text-green-600 text-lg leading-none">✓</span>
+          <div>
+            <p className="text-sm font-semibold text-green-800">Subscription activated</p>
+            <p className="text-xs text-green-700 mt-0.5">
+              Welcome to {info.label}! Your photo allowance has been updated.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Account settings</h1>
         <p className="text-gray-500 text-sm mt-0.5">{user.email}</p>
@@ -151,13 +180,22 @@ export default function SettingsClient({ user, stats, subscription }) {
           ))}
         </div>
 
-        {tier === 'free' && (
+        {hasStripeCustomer ? (
+          <div className="space-y-2">
+            <button
+              onClick={openBillingPortal}
+              disabled={portalLoading}
+              className="w-full block text-center bg-gray-100 text-gray-700 text-xs font-bold py-2.5 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+              {portalLoading ? 'Opening…' : 'Manage subscription'}
+            </button>
+            {portalError && <p className="text-xs text-red-600 text-center">⚠ {portalError}</p>}
+          </div>
+        ) : tier === 'free' ? (
           <Link href="/pricing"
             className="block text-center bg-[#C8102E] text-white text-xs font-bold py-2.5 rounded-xl hover:bg-[#9B0B22] transition-colors">
             Upgrade plan
           </Link>
-        )}
-        {tier !== 'free' && tier !== 'fleet' && (
+        ) : (
           <Link href="/pricing"
             className="block text-center bg-gray-100 text-gray-700 text-xs font-bold py-2.5 rounded-xl hover:bg-gray-200 transition-colors">
             View upgrade options

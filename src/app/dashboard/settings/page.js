@@ -4,13 +4,15 @@ import FlickrSettings from '@/components/FlickrSettings'
 
 const TIER_LIMITS = { free: 50, basic: 500, pro: 5000, fleet: 99999 }
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
+  const subscriptionSuccess = searchParams?.subscription === 'success'
+
   const { data: profile } = await supabase
     .from('profiles')
-    .select('flickr_username, flickr_auto_upload, flickr_album_format, flickr_title_format, flickr_description_format, subscription_tier, tokens_used, tokens_reset_at')
+    .select('flickr_username, flickr_auto_upload, flickr_album_format, flickr_title_format, flickr_description_format, subscription_tier, tokens_used, tokens_reset_at, stripe_customer_id')
     .eq('id', user.id)
     .single()
 
@@ -58,10 +60,17 @@ export default async function SettingsPage() {
 
   const subscription = { tier, limit, used, remaining, resetAt }
   const stats = { totalJobs, totalPhotos, totalFound, successRate, topOperators, topLocations }
+  const hasStripeCustomer = !!profile?.stripe_customer_id
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <SettingsClient user={user} stats={stats} subscription={subscription} />
+      <SettingsClient
+        user={user}
+        stats={stats}
+        subscription={subscription}
+        hasStripeCustomer={hasStripeCustomer}
+        subscriptionSuccess={subscriptionSuccess}
+      />
       {profile?.flickr_username && (
         <FlickrSettings initialSettings={profile} />
       )}

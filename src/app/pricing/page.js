@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import PricingCTA from './PricingCTA'
 
 const TIERS = [
   {
@@ -31,8 +32,7 @@ const TIERS = [
     photosLabel: '500 photos/month',
     model: 'Haiku',
     escalation: false,
-    cta: 'Contact us',
-    ctaHref: 'mailto:hello@busboard.app',
+    cta: 'Subscribe',
     highlight: false,
     features: [
       '500 photos per month',
@@ -52,8 +52,7 @@ const TIERS = [
     photosLabel: '5,000 photos/month',
     model: 'Haiku + Sonnet',
     escalation: true,
-    cta: 'Contact us',
-    ctaHref: 'mailto:hello@busboard.app',
+    cta: 'Subscribe',
     highlight: true,
     features: [
       '5,000 photos per month',
@@ -75,8 +74,7 @@ const TIERS = [
     photosLabel: 'Unlimited photos',
     model: 'Haiku + Sonnet',
     escalation: true,
-    cta: 'Contact us',
-    ctaHref: 'mailto:hello@busboard.app',
+    cta: 'Subscribe',
     highlight: false,
     features: [
       'Unlimited photos per month',
@@ -198,13 +196,14 @@ export default function PricingPage() {
                 </ul>
 
                 {/* CTA */}
-                <Link href={tier.ctaHref}
-                  className={`block text-center text-sm font-bold py-2.5 rounded-xl transition-all
-                    ${tier.highlight
-                      ? 'bg-[#C8102E] text-white hover:bg-[#9B0B22]'
-                      : 'bg-[#1A1A1A] text-white hover:bg-[#333]'}`}>
-                  {tier.cta}
-                </Link>
+                {tier.id === 'free' ? (
+                  <Link href={tier.ctaHref}
+                    className="block text-center text-sm font-bold py-2.5 rounded-xl transition-all bg-[#1A1A1A] text-white hover:bg-[#333]">
+                    {tier.cta}
+                  </Link>
+                ) : (
+                  <PricingCTA tier={tier.id} label={tier.cta} highlight={tier.highlight} />
+                )}
               </div>
             </div>
           ))}
@@ -242,7 +241,7 @@ export default function PricingPage() {
             },
             {
               q: 'Can I upgrade or downgrade?',
-              a: 'Contact us and we\'ll sort it. Plan changes take effect immediately and your token allowance updates to match your new tier.',
+              a: 'You can change or cancel your plan at any time from Account Settings → Manage subscription. Upgrades take effect immediately; downgrades apply at the end of your billing period.',
             },
             {
               q: 'What is batch processing?',
