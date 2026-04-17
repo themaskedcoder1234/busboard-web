@@ -1,10 +1,14 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function PricingCTA({ tier, label, highlight }) {
-  const [loading, setLoading] = useState(false)
+export default function PricingCTA({ tier, label, highlight, isCurrentPlan = false, autoTrigger = false }) {
+  const [loading, setLoading] = useState(autoTrigger)
   const router = useRouter()
+
+  useEffect(() => {
+    if (autoTrigger) handleClick()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleClick() {
     setLoading(true)
@@ -16,12 +20,11 @@ export default function PricingCTA({ tier, label, highlight }) {
       })
 
       if (res.status === 401) {
-        router.push('/login?redirect=/pricing')
+        router.push(`/login?redirect=${encodeURIComponent(`/pricing?tier=${tier}`)}`)
         return
       }
 
       const data = await res.json()
-
       if (!res.ok) {
         alert(data.error || 'Something went wrong. Please try again.')
         setLoading(false)
@@ -33,6 +36,14 @@ export default function PricingCTA({ tier, label, highlight }) {
       alert('Something went wrong. Please try again.')
       setLoading(false)
     }
+  }
+
+  if (isCurrentPlan) {
+    return (
+      <div className="w-full text-center text-sm font-bold py-2.5 rounded-xl bg-green-50 border-2 border-green-200 text-green-700">
+        ✓ Current plan
+      </div>
+    )
   }
 
   return (

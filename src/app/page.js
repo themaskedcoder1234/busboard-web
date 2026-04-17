@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import PricingCTA from './pricing/PricingCTA'
 
 // ── Destination Blind component ───────────────────────────────────────────────
 function DestinationBlind({ route, text, sub }) {
@@ -280,10 +281,10 @@ export default function Home() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
-            { name: 'Free',  price: '£0',  period: 'forever',    photos: '50/mo',       model: 'Haiku',          highlight: false, id: 'free'  },
-            { name: 'Basic', price: '£8',  period: 'per month',  photos: '500/mo',      model: 'Haiku',          highlight: false, id: 'basic' },
-            { name: 'Pro',   price: '£19', period: 'per month',  photos: '5,000/mo',    model: 'Haiku + Sonnet', highlight: true,  id: 'pro'   },
-            { name: 'Fleet', price: '£49', period: 'per month',  photos: 'Unlimited',   model: 'Haiku + Sonnet', highlight: false, id: 'fleet' },
+            { name: 'Free',  price: '£0',  period: 'forever',   photos: '50/mo',     model: 'Haiku',          highlight: false, id: 'free'  },
+            { name: 'Basic', price: '£8',  period: 'per month', photos: '500/mo',    model: 'Haiku',          highlight: false, id: 'basic' },
+            { name: 'Pro',   price: '£19', period: 'per month', photos: '5,000/mo',  model: 'Haiku + Sonnet', highlight: true,  id: 'pro'   },
+            { name: 'Fleet', price: '£49', period: 'per month', photos: 'Unlimited', model: 'Haiku + Sonnet', highlight: false, id: 'fleet' },
           ].map(t => (
             <div key={t.id} className={`rounded-2xl border-2 p-5 flex flex-col gap-3
               ${t.highlight ? 'border-[#C8102E] bg-white shadow-lg shadow-[#C8102E]/10' : 'border-[#E8DDD8] bg-white'}`}>
@@ -301,11 +302,16 @@ export default function Home() {
                 <p>📷 {t.photos}</p>
                 <p>🤖 {t.model}</p>
               </div>
-              <Link href="/signup"
-                className={`mt-auto text-center text-xs font-bold py-2 rounded-xl transition-all
-                  ${t.highlight ? 'bg-[#C8102E] text-white hover:bg-[#9B0B22]' : 'bg-[#1A1A1A] text-white hover:bg-[#333]'}`}>
-                {t.id === 'free' ? 'Get started free' : 'Contact us'}
-              </Link>
+              <div className="mt-auto">
+                {t.id === 'free' ? (
+                  <Link href="/signup"
+                    className="block text-center text-xs font-bold py-2 rounded-xl transition-all bg-[#1A1A1A] text-white hover:bg-[#333]">
+                    Get started free
+                  </Link>
+                ) : (
+                  <PricingCTA tier={t.id} label="Subscribe" highlight={t.highlight} />
+                )}
+              </div>
             </div>
           ))}
         </div>
