@@ -2,7 +2,14 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function PricingCTA({ tier, label, highlight, isCurrentPlan = false, autoTrigger = false }) {
+export default function PricingCTA({
+  tier,
+  label,
+  highlight,
+  isCurrentPlan = false,
+  autoTrigger   = false,
+  openPortal    = false,   // true for existing Stripe subscribers changing plan
+}) {
   const [loading, setLoading] = useState(autoTrigger)
   const router = useRouter()
 
@@ -13,10 +20,18 @@ export default function PricingCTA({ tier, label, highlight, isCurrentPlan = fal
   async function handleClick() {
     setLoading(true)
     try {
+      if (openPortal) {
+        const res  = await fetch('/api/stripe/portal', { method: 'POST' })
+        const data = await res.json()
+        if (!res.ok) { alert(data.error || 'Could not open billing portal. Please try again.'); setLoading(false); return }
+        window.location.href = data.url
+        return
+      }
+
       const res = await fetch('/api/stripe/checkout', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier }),
+        body:    JSON.stringify({ tier }),
       })
 
       if (res.status === 401) {
@@ -25,12 +40,7 @@ export default function PricingCTA({ tier, label, highlight, isCurrentPlan = fal
       }
 
       const data = await res.json()
-      if (!res.ok) {
-        alert(data.error || 'Something went wrong. Please try again.')
-        setLoading(false)
-        return
-      }
-
+      if (!res.ok) { alert(data.error || 'Something went wrong. Please try again.'); setLoading(false); return }
       window.location.href = data.url
     } catch {
       alert('Something went wrong. Please try again.')

@@ -99,17 +99,21 @@ export default async function PricingPage({ searchParams }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
+  const TIER_ORDER = { free: 0, basic: 1, pro: 2, fleet: 3 }
+
   let currentTier = null
+  let hasStripeCustomer = false
   if (user) {
     const { data: profile } = await supabase
       .from('profiles')
-      .select('subscription_tier')
+      .select('subscription_tier, stripe_customer_id')
       .eq('id', user.id)
       .single()
-    currentTier = profile?.subscription_tier || 'free'
+    currentTier        = profile?.subscription_tier  || 'free'
+    hasStripeCustomer  = !!profile?.stripe_customer_id
   }
 
-  // ?tier=pro from login redirect triggers auto-checkout
+  // ?tier=pro from login redirect triggers auto-checkout on mount
   const autoTriggerTier = searchParams?.tier || null
 
   return (
@@ -166,6 +170,11 @@ export default async function PricingPage({ searchParams }) {
           {TIERS.map(tier => {
             const isCurrentPlan = currentTier === tier.id
             const autoTrigger   = autoTriggerTier === tier.id
+            // Existing Stripe subscribers use the portal to change plan
+            const openPortal = hasStripeCustomer && !isCurrentPlan && tier.id !== 'free'
+            const ctaLabel = openPortal
+              ? (TIER_ORDER[tier.id] > TIER_ORDER[currentTier] ? 'Upgrade' : 'Downgrade')
+              : tier.cta
 
             return (
               <div key={tier.id} className={`rounded-2xl border-2 flex flex-col overflow-hidden
@@ -241,10 +250,11 @@ export default async function PricingPage({ searchParams }) {
                   ) : (
                     <PricingCTA
                       tier={tier.id}
-                      label={tier.cta}
+                      label={ctaLabel}
                       highlight={tier.highlight}
                       isCurrentPlan={isCurrentPlan}
                       autoTrigger={autoTrigger}
+                      openPortal={openPortal}
                     />
                   )}
                 </div>
