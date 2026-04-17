@@ -61,6 +61,9 @@ export default function Home() {
           <span className="text-white font-black tracking-widest text-lg font-mono">BUSBOARD</span>
         </div>
         <span className="flex-1" />
+        <Link href="/pricing" className="text-white/80 hover:text-white text-sm font-medium transition-colors hidden sm:block">
+          Pricing
+        </Link>
         <Link href="/login" className="text-white/80 hover:text-white text-sm font-medium transition-colors hidden sm:block">
           Log in
         </Link>
@@ -270,11 +273,54 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ── Pricing ───────────────────────────────────────────────────────────── */}
+      <section className="max-w-5xl mx-auto px-4 sm:px-8 py-16">
+        <div className="mb-10">
+          <DestinationBlind route="4" text="Pricing" sub="All stops" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          {[
+            { name: 'Free',  price: '£0',  period: 'forever',    photos: '50/mo',       model: 'Haiku',          highlight: false, id: 'free'  },
+            { name: 'Basic', price: '£8',  period: 'per month',  photos: '500/mo',      model: 'Haiku',          highlight: false, id: 'basic' },
+            { name: 'Pro',   price: '£19', period: 'per month',  photos: '5,000/mo',    model: 'Haiku + Sonnet', highlight: true,  id: 'pro'   },
+            { name: 'Fleet', price: '£49', period: 'per month',  photos: 'Unlimited',   model: 'Haiku + Sonnet', highlight: false, id: 'fleet' },
+          ].map(t => (
+            <div key={t.id} className={`rounded-2xl border-2 p-5 flex flex-col gap-3
+              ${t.highlight ? 'border-[#C8102E] bg-white shadow-lg shadow-[#C8102E]/10' : 'border-[#E8DDD8] bg-white'}`}>
+              {t.highlight && (
+                <span className="text-[#C8102E] text-[10px] font-black tracking-widest uppercase font-mono">Most popular</span>
+              )}
+              <div>
+                <p className="font-black text-[#1A1A1A] text-base">{t.name}</p>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xl font-black text-[#1A1A1A]">{t.price}</span>
+                  <span className="text-[#7A7068] text-xs">{t.period}</span>
+                </div>
+              </div>
+              <div className="space-y-1 text-xs text-[#7A7068]">
+                <p>📷 {t.photos}</p>
+                <p>🤖 {t.model}</p>
+              </div>
+              <Link href="/signup"
+                className={`mt-auto text-center text-xs font-bold py-2 rounded-xl transition-all
+                  ${t.highlight ? 'bg-[#C8102E] text-white hover:bg-[#9B0B22]' : 'bg-[#1A1A1A] text-white hover:bg-[#333]'}`}>
+                {t.id === 'free' ? 'Get started free' : 'Contact us'}
+              </Link>
+            </div>
+          ))}
+        </div>
+        <div className="text-center">
+          <Link href="/pricing" className="text-sm text-[#C8102E] font-medium hover:underline">
+            View full plan details →
+          </Link>
+        </div>
+      </section>
+
       {/* ── CTA ───────────────────────────────────────────────────────────────── */}
       <section className="bg-[#C8102E] py-16">
         <div className="max-w-5xl mx-auto px-4 sm:px-8 text-center">
           <div className="mb-6 flex justify-center">
-            <DestinationBlind route="4" text="All aboard" sub="Final stop" />
+            <DestinationBlind route="5" text="All aboard" sub="Final stop" />
           </div>
           <h2 className="text-3xl sm:text-4xl font-black text-white mb-4 leading-tight">
             Stop renaming files by hand.
@@ -313,6 +359,7 @@ export default function Home() {
               <p className="text-[#F5F0E8]/40 text-xs">Built for the bus obsessed</p>
             </div>
             <div className="flex gap-6">
+              <Link href="/pricing" className="text-[#F5F0E8]/50 hover:text-[#F5F0E8] text-xs transition-colors">Pricing</Link>
               <Link href="/login" className="text-[#F5F0E8]/50 hover:text-[#F5F0E8] text-xs transition-colors">Log in</Link>
               <Link href="/signup" className="text-[#F5F0E8]/50 hover:text-[#F5F0E8] text-xs transition-colors">Sign up</Link>
             </div>

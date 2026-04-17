@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase-server'
 import DashboardNav from '@/components/DashboardNav'
 
+const TIER_LIMITS = { free: 50, basic: 500, pro: 5000, fleet: 99999 }
+
 export default async function DashboardLayout({ children }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -9,13 +11,25 @@ export default async function DashboardLayout({ children }) {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('tokens, is_admin')
+    .select('is_admin, subscription_tier, tokens_used, tokens_reset_at')
     .eq('id', user.id)
     .single()
 
+  const tier      = profile?.subscription_tier ?? 'free'
+  const limit     = TIER_LIMITS[tier] ?? 50
+  const used      = profile?.tokens_used ?? 0
+  const remaining = Math.max(0, limit - used)
+
   return (
     <div className="min-h-screen flex flex-col">
-      <DashboardNav user={user} tokens={profile?.tokens ?? 0} isAdmin={!!profile?.is_admin} />
+      <DashboardNav
+        user={user}
+        tier={tier}
+        tokensUsed={used}
+        tokenLimit={limit}
+        tokensRemaining={remaining}
+        isAdmin={!!profile?.is_admin}
+      />
       <main className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-5 sm:py-8">
         {children}
       </main>

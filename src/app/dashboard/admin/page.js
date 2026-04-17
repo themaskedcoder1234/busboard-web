@@ -18,35 +18,42 @@ export default async function AdminPage() {
   const admin = createAdminClient()
   const { data: users } = await admin
     .from('profiles')
-    .select('id, email, tokens, is_admin, created_at')
+    .select('id, email, tokens, is_admin, subscription_tier, tokens_used, tokens_reset_at, created_at')
     .order('created_at', { ascending: false })
 
-  const totalTokens = users?.reduce((sum, u) => sum + (u.tokens || 0), 0) || 0
+  const tierCounts = { free: 0, basic: 0, pro: 0, fleet: 0 }
+  users?.forEach(u => {
+    const t = u.subscription_tier ?? 'free'
+    tierCounts[t] = (tierCounts[t] || 0) + 1
+  })
 
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Admin — Users & Tokens</h1>
-        <p className="text-gray-500 text-sm mt-0.5">{users?.length || 0} users · {totalTokens} tokens allocated</p>
+        <h1 className="text-2xl font-bold text-gray-900">Admin — Users & Subscriptions</h1>
+        <p className="text-gray-500 text-sm mt-0.5">{users?.length || 0} users</p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total users',  value: users?.length || 0 },
-          { label: 'Total tokens', value: totalTokens },
-          { label: 'Admins',       value: users?.filter(u => u.is_admin).length || 0 },
+          { label: 'Total users', value: users?.length || 0 },
+          { label: 'Admins',      value: users?.filter(u => u.is_admin).length || 0 },
         ].map(s => (
           <div key={s.label} className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-center">
             <p className="text-2xl font-bold text-[#C8102E]">{s.value}</p>
             <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
           </div>
         ))}
+        {Object.entries(tierCounts).map(([tier, count]) => (
+          <div key={tier} className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-center">
+            <p className="text-2xl font-bold text-[#C8102E]">{count}</p>
+            <p className="text-xs text-gray-500 mt-0.5 capitalize">{tier}</p>
+          </div>
+        ))}
       </div>
 
-      <div>
-        <p className="text-xs text-gray-400 mb-2">Enter a positive number to add tokens, negative to remove. Each photo processed uses 1 token.</p>
-        <AdminUsersTable initialUsers={users || []} />
-      </div>
+      <AdminUsersTable initialUsers={users || []} />
     </div>
   )
 }
