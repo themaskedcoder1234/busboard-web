@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { stripe, TIER_FROM_PRICE } from '@/lib/stripe'
+import { getStripe, TIER_FROM_PRICE } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase-server'
 
 export async function POST(request) {
@@ -8,7 +8,7 @@ export async function POST(request) {
 
   let event
   try {
-    event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET)
+    event = getStripe().webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET)
   } catch (err) {
     console.error('Stripe webhook signature error:', err.message)
     return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 })

@@ -1,18 +1,23 @@
 import Stripe from 'stripe'
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2024-06-20',
-})
+// Lazy singleton — not instantiated at module load so the build succeeds
+// without STRIPE_SECRET_KEY being set at build time.
+let _stripe
 
-// Create these prices in your Stripe dashboard (recurring, monthly, GBP)
-// then set the price IDs as environment variables
-export const STRIPE_PRICE_IDS = {
-  basic: process.env.STRIPE_PRICE_BASIC,   // £8/mo
-  pro:   process.env.STRIPE_PRICE_PRO,     // £19/mo
-  fleet: process.env.STRIPE_PRICE_FLEET,   // £49/mo
+export function getStripe() {
+  if (!_stripe) {
+    _stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' })
+  }
+  return _stripe
 }
 
-// Reverse map used in webhook handler: Stripe price ID → tier name
+export const STRIPE_PRICE_IDS = {
+  basic: process.env.STRIPE_PRICE_BASIC,
+  pro:   process.env.STRIPE_PRICE_PRO,
+  fleet: process.env.STRIPE_PRICE_FLEET,
+}
+
+// Reverse map: Stripe price ID → tier name (used in webhook handler)
 export const TIER_FROM_PRICE = Object.fromEntries(
   Object.entries(STRIPE_PRICE_IDS)
     .filter(([, priceId]) => priceId)
